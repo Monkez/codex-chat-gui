@@ -294,17 +294,20 @@ export function DemoApp() {
             detail?: string
             auth?: { authenticated: boolean; detail?: string }
           }
-          if (!statusPayload.done) return
-          if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
-          loginPollRef.current = null
           if (statusPayload.auth?.authenticated) {
+            if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
+            loginPollRef.current = null
             setAuthState({
               status: "authenticated",
               accountLabel: "Codex account",
               detail: statusPayload.auth.detail,
             })
             appendStatus("Codex account connected", "Real SDK streaming is now enabled.")
-          } else {
+            return
+          }
+          if (statusPayload.done) {
+            if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
+            loginPollRef.current = null
             setAuthState({
               status: "error",
               detail: statusPayload.detail || "Codex login did not complete.",
@@ -541,11 +544,6 @@ export function DemoApp() {
       onCopyText={handleCopyText}
       onPromptResolve={handlePromptResolve}
       onErrorAction={refreshAuthStatus}
-      quickPrompts={[
-        "Inspect the workspace and propose a Codex SDK adapter",
-        "Show compact reasoning, command activity and edited files",
-        "Analyze the attached files and summarize next changes",
-      ]}
     />
   )
 }

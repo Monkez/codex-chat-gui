@@ -1,9 +1,17 @@
+export function stripAnsi(value) {
+  return String(value ?? "")
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+    .replace(/\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+    .replace(/\[[0-9;]*m/g, "")
+}
+
 export function cleanCodexErrorMessage(value) {
-  const raw = typeof value === "string"
+  const rawValue = typeof value === "string"
     ? value
     : value?.message
       ? String(value.message)
       : JSON.stringify(value)
+  const raw = stripAnsi(rawValue)
 
   if (raw.includes("reasoning.effort 'minimal'")) {
     return "Thinking 'minimal' is not compatible with the active Codex tools in this session. The demo now uses Thinking 'low' as the fastest compatible mode."

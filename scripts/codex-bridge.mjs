@@ -5,7 +5,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Codex } from "@openai/codex-sdk"
-import { cleanCodexErrorMessage, sdkItemToUiMessage } from "./codex-ui-adapter.mjs"
+import { cleanCodexErrorMessage, sdkItemToUiMessage, stripAnsi } from "./codex-ui-adapter.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, "..")
@@ -78,7 +78,7 @@ function runCodex(args, options = {}) {
 
 async function authStatus() {
   const result = await runCodex(["login", "status"])
-  const output = `${result.stdout}\n${result.stderr}`.trim()
+  const output = stripAnsi(`${result.stdout}\n${result.stderr}`).trim()
   return {
     authenticated: result.code === 0,
     status: result.code === 0 ? "authenticated" : "signed_out",
@@ -87,9 +87,18 @@ async function authStatus() {
 }
 
 function parseDeviceOutput(output) {
-  const verificationUrl = output.match(/https:\/\/[^\s)]+/i)?.[0]
-  const userCode = output.match(/\b[A-Z0-9]{4}[- ][A-Z0-9]{4}\b/)?.[0]
+  const cleanOutput = stripAnsi(output)
+  const verificationUrl = cleanOutput.match(/https:\/\/[^\s)]+/i)?.[0]
+  const userCode = cleanOutput.match(/\b[A-Z0-9]{4}[- ][A-Z0-9]{4}\b/)?.[0]
   return { verificationUrl, userCode }
+}
+
+function deviceLoginDetail(parsed, fallbackOutput = "") {
+  if (parsed.verificationUrl || parsed.userCode) {
+    return "Open the verification page and approve Codex access."
+  }
+  const fallback = stripAnsi(fallbackOutput).trim()
+  return fallback || "Waiting for Codex to provide a device login code..."
 }
 
 function startDeviceLogin(res) {
@@ -133,7 +142,7 @@ function startDeviceLogin(res) {
       ok: true,
       loginId,
       ...parsed,
-      detail: output.trim(),
+      detail: deviceLoginDetail(parsed, output),
     })
   }
 
@@ -167,7 +176,7 @@ function startDeviceLogin(res) {
       sendJson(res, code === 0 ? 200 : 500, {
         ok: code === 0,
         loginId,
-        detail: output.trim(),
+        detail: deviceLoginDetail(parseDeviceOutput(output), output),
       })
     }
   })
@@ -306,12 +315,22 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 404, { ok: false, error: "Unknown login session" })
         return
       }
-      const status = login.done ? await authStatus() : null
+      const status = await authStatus()
+      if (status.authenticated && !login.done) {
+        login.done = true
+        login.code = 0
+        try {
+          login.child.kill()
+        } catch {
+          // ignore
+        }
+        setTimeout(() => activeLogins.delete(loginId), 5000).unref?.()
+      }
       sendJson(res, 200, {
         ok: true,
-        done: login.done,
+        done: login.done || status.authenticated,
         exitCode: login.code,
-        detail: login.output.trim(),
+        detail: deviceLoginDetail(parseDeviceOutput(login.output), login.output),
         auth: status,
       })
       return
@@ -321,7 +340,7 @@ const server = http.createServer(async (req, res) => {
       const result = await runCodex(["logout"])
       sendJson(res, result.code === 0 ? 200 : 500, {
         ok: result.code === 0,
-        detail: `${result.stdout}\n${result.stderr}`.trim(),
+        detail: stripAnsi(`${result.stdout}\n${result.stderr}`).trim(),
       })
       return
     }

@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { cleanCodexErrorMessage, sdkItemToUiMessage } from "../scripts/codex-ui-adapter.mjs"
+import { cleanCodexErrorMessage, sdkItemToUiMessage, stripAnsi } from "../scripts/codex-ui-adapter.mjs"
 
 test("sdkItemToUiMessage scopes ids per run", () => {
   const message = sdkItemToUiMessage({
@@ -33,4 +33,10 @@ test("cleanCodexErrorMessage removes warning noise", () => {
   const message = cleanCodexErrorMessage("WARN noisy\nCodex Exec exited with code 1: useful")
 
   assert.equal(message, "Codex Exec exited with code 1: useful")
+})
+
+test("stripAnsi removes terminal color sequences from Codex CLI output", () => {
+  const message = stripAnsi("Welcome \u001b[90m0.13.0\u001b[0m [94mhttps://auth.openai.com/codex/device[0m")
+
+  assert.equal(message, "Welcome 0.13.0 https://auth.openai.com/codex/device")
 })
