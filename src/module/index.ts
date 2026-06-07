@@ -1,4 +1,10 @@
+import "./styles.css"
+
 export { CodexChat } from "./CodexChat"
+export { parseSseFrame } from "./sse"
+export { buildTranscriptRows } from "./transcriptRows"
+export type { TranscriptRenderRow } from "./transcriptRows"
+export type { ParsedSseFrame } from "./sse"
 export type {
   CodexAssistantMessage,
   CodexChatAttachment,
@@ -6,9 +12,12 @@ export type {
   CodexChatSubmitPayload,
   CodexAuthState,
   CodexAuthStatus,
+  CodexChatDensity,
   CodexFileChange,
   CodexFileChangeMessage,
   CodexFileLinkMessage,
+  CodexChatTheme,
+  CodexErrorState,
   CodexLinkTarget,
   CodexPromptChoice,
   CodexPromptRequest,

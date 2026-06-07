@@ -1,13 +1,31 @@
 {
-  "name": "codex-chat-ui",
-  "private": true,
+  "name": "@monkez/codex-chat-gui",
+  "private": false,
   "version": "0.1.0",
   "type": "module",
+  "main": "./dist/lib/codex-chat-gui.umd.cjs",
+  "module": "./dist/lib/codex-chat-gui.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/lib/codex-chat-gui.js",
+      "require": "./dist/lib/codex-chat-gui.umd.cjs"
+    },
+    "./styles.css": "./dist/lib/codex-chat-gui.css"
+  },
+  "files": [
+    "dist/lib",
+    "dist/types",
+    "README.md"
+  ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:ui": "vite --host 0.0.0.0",
     "dev:bridge": "node scripts/codex-bridge.mjs",
     "build": "tsc -b && vite build",
+    "build:lib": "tsc -p tsconfig.lib.json && vite build --config vite.lib.config.ts",
+    "test": "npm run build:lib && node --test tests/*.test.mjs",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

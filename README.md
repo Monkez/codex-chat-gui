@@ -18,6 +18,20 @@ The dev command starts both services:
 
 Use **Connect Codex** in the header to sign in with your real Codex/ChatGPT account through `codex login --device-auth`. After login, prompts are sent to `@openai/codex-sdk` and streamed back into the chat UI.
 
+## Package Build
+
+```bash
+npm run build:lib
+npm test
+```
+
+The package entry points are:
+
+- `@monkez/codex-chat-gui` for React components, types, transcript utilities, and SSE parsing.
+- `@monkez/codex-chat-gui/styles.css` for the bundled UI stylesheet.
+
+The demo app builds to `dist/app`; the reusable package builds to `dist/lib` and `dist/types`.
+
 ## Module API
 
 ```tsx
@@ -25,7 +39,8 @@ import {
   CodexChat,
   type CodexPromptRequest,
   type CodexTranscriptItem,
-} from "./src/module"
+} from "@monkez/codex-chat-gui"
+import "@monkez/codex-chat-gui/styles.css"
 
 function App() {
   const [messages, setMessages] = useState<CodexTranscriptItem[]>([])
@@ -37,6 +52,9 @@ function App() {
       isRunning={isRunning}
       runStatus={isRunning ? "running" : "idle"}
       promptRequest={promptRequest}
+      theme="system"
+      density="comfortable"
+      transcriptWindowSize={300}
       onSubmit={async ({ content, attachments }) => {
         setMessages((current) => [
           ...current,
@@ -67,6 +85,9 @@ The demo also shows host callbacks for `onOpenFile`, `onRevealFile`, `onOpenFile
 
 - `headerControls` lets a host app inject model, reasoning, permission, or project controls into the chat header.
 - `promptRequest` + `onPromptResolve` render an accessible modal for approvals and user choices without coupling the UI to a backend. Use `defaultChoiceId` and `cancelChoiceId` to control keyboard defaults and Escape/backdrop behavior.
+- `theme`, `density`, and CSS variables support light/dark/system rendering and compact dashboards.
+- `errorState` + `onErrorAction` provide a reusable bridge/auth/usage-limit error banner.
+- `transcriptWindowSize` limits rendered transcript rows for long sessions. Pass `null` to render all rows.
 - File and link callbacks are host-owned. The web UI never opens Windows Explorer directly; Electron, Tauri, or a local bridge should implement those actions.
 - Transcript item ids should be scoped per agent turn/run so later SDK events do not overwrite messages from earlier user prompts.
 - File-change line counts should be marked with `statsKind: "exact"` only when the host has real diff stats. Use `statsKind: "unavailable"` to render changed files without misleading `+/-` counts.
@@ -77,6 +98,7 @@ The demo also shows host callbacks for `onOpenFile`, `onRevealFile`, `onOpenFile
 - Assistant text uses a lightweight typewriter effect for short/medium responses and skips animation for long markdown or `prefers-reduced-motion`.
 - The demo bridge reuses one Codex SDK client and does not send raw SDK events to the browser unless `includeRawEvents` is explicitly set.
 - The demo SSE parser supports multi-line `data:` frames and processes a final frame even if the stream closes without a trailing delimiter.
+- `buildTranscriptRows` and `parseSseFrame` are exported as pure utilities and covered by Node tests.
 
 ## Auth
 
@@ -87,6 +109,10 @@ The module exposes `authState`, `onStartAccountLogin`, `onAuthenticate`, and `on
 - `POST /api/codex/run` starts a real SDK stream.
 
 The browser never stores Codex credentials. The local bridge owns Codex auth/runtime state and creates the SDK client.
+
+## Codex Adapter
+
+The demo bridge uses `scripts/codex-ui-adapter.mjs` to map Codex SDK items into `CodexTranscriptItem` records. Keeping this mapping separate from HTTP/SSE code makes it easier to reuse the adapter in Electron, Tauri, Next.js route handlers, or a local desktop bridge.
 
 ## Notes From Kanna
 

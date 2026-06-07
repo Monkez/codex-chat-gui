@@ -7,7 +7,10 @@ import {
   type CodexFileChangeMessage,
   type CodexPromptChoice,
   type CodexPromptRequest,
+  type CodexChatDensity,
+  type CodexChatTheme,
   type CodexTranscriptItem,
+  parseSseFrame,
 } from "../module"
 import { createUserMessage } from "./mockAgent"
 
@@ -21,6 +24,8 @@ interface RunSettings {
   sandboxMode: CodexSandboxMode
   approvalPolicy: CodexApprovalPolicy
   networkAccessEnabled: boolean
+  theme: CodexChatTheme
+  density: CodexChatDensity
 }
 
 const defaultRunSettings: RunSettings = {
@@ -29,6 +34,8 @@ const defaultRunSettings: RunSettings = {
   sandboxMode: "workspace-write",
   approvalPolicy: "never",
   networkAccessEnabled: false,
+  theme: "light",
+  density: "comfortable",
 }
 
 const initialMessages: CodexTranscriptItem[] = [
@@ -46,30 +53,6 @@ const initialMessages: CodexTranscriptItem[] = [
     createdAt: 0,
   },
 ]
-
-function parseSseFrame(frame: string) {
-  let eventName = "message"
-  const dataLines: string[] = []
-  for (const line of frame.split(/\r?\n/)) {
-    if (line.startsWith("event:")) {
-      eventName = line.slice(6).trim()
-    } else if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trimStart())
-    }
-  }
-  if (dataLines.length === 0) return null
-  try {
-    return {
-      eventName,
-      data: JSON.parse(dataLines.join("\n")),
-    }
-  } catch {
-    return {
-      eventName: "error",
-      data: { message: dataLines.join("\n") },
-    }
-  }
-}
 
 function RunSettingsControl({
   settings,
@@ -155,6 +138,29 @@ function RunSettingsControl({
             />
             <span>Network access</span>
           </label>
+          <label>
+            <span>Theme</span>
+            <select
+              value={settings.theme}
+              disabled={disabled}
+              onChange={(event) => update("theme", event.target.value as CodexChatTheme)}
+            >
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+              <option value="system">System</option>
+            </select>
+          </label>
+          <label>
+            <span>Density</span>
+            <select
+              value={settings.density}
+              disabled={disabled}
+              onChange={(event) => update("density", event.target.value as CodexChatDensity)}
+            >
+              <option value="comfortable">Comfortable</option>
+              <option value="compact">Compact</option>
+            </select>
+          </label>
         </div>
       ) : null}
     </div>
@@ -184,6 +190,12 @@ function createStatus(label: string, detail?: string): CodexTranscriptItem {
     detail,
     createdAt: Date.now(),
   }
+}
+
+function readPayloadField(data: unknown, field: string) {
+  return typeof data === "object" && data !== null && field in data
+    ? (data as Record<string, unknown>)[field]
+    : undefined
 }
 
 export function DemoApp() {
@@ -370,9 +382,11 @@ export function DemoApp() {
           if (event.eventName === "ui-message") {
             upsertMessage(event.data as CodexTranscriptItem)
           } else if (event.eventName === "thread") {
-            setThreadId(event.data.threadId)
+            const nextThreadId = readPayloadField(event.data, "threadId")
+            if (typeof nextThreadId === "string") setThreadId(nextThreadId)
           } else if (event.eventName === "error") {
-            appendCodexError(event.data.message ?? String(event.data))
+            const message = readPayloadField(event.data, "message")
+            appendCodexError(typeof message === "string" ? message : String(event.data))
           } else if (event.eventName === "done") {
             setRunLabel("Ready")
           }
@@ -383,9 +397,11 @@ export function DemoApp() {
         if (event?.eventName === "ui-message") {
           upsertMessage(event.data as CodexTranscriptItem)
         } else if (event?.eventName === "thread") {
-          setThreadId(event.data.threadId)
+          const nextThreadId = readPayloadField(event.data, "threadId")
+          if (typeof nextThreadId === "string") setThreadId(nextThreadId)
         } else if (event?.eventName === "error") {
-          appendCodexError(event.data.message ?? String(event.data))
+          const message = readPayloadField(event.data, "message")
+          appendCodexError(typeof message === "string" ? message : String(event.data))
         }
       }
     } catch (error) {
@@ -480,6 +496,14 @@ export function DemoApp() {
     appendStatus("User prompt answered", `${request.title}: ${choice.label}`)
   }
 
+  const errorState = authState.status === "error"
+    ? {
+      title: "Codex connection needs attention",
+      message: authState.detail,
+      actionLabel: "Retry",
+    }
+    : null
+
   return (
     <CodexChat
       title="Codex Chat UI"
@@ -490,6 +514,9 @@ export function DemoApp() {
       runStatus={isRunning ? "running" : "idle"}
       runLabel={runLabel}
       authState={authState}
+      theme={runSettings.theme}
+      density={runSettings.density}
+      errorState={errorState}
       headerControls={(
         <>
           <RunSettingsControl
@@ -513,6 +540,7 @@ export function DemoApp() {
       onOpenExternalLink={handleOpenExternalLink}
       onCopyText={handleCopyText}
       onPromptResolve={handlePromptResolve}
+      onErrorAction={refreshAuthStatus}
       quickPrompts={[
         "Inspect the workspace and propose a Codex SDK adapter",
         "Show compact reasoning, command activity and edited files",

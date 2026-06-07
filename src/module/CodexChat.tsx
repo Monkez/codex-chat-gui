@@ -44,6 +44,7 @@ import type {
   CodexTranscriptItem,
 } from "./types"
 import { formatBytes, formatDuration, makeAttachment } from "./format"
+import { buildTranscriptRows } from "./transcriptRows"
 
 const ACCEPTED_PASTE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
@@ -70,10 +71,6 @@ type LinkHandlers = Pick<
   | "onUndoChanges"
   | "onReviewChanges"
 >
-
-type TranscriptRenderRow =
-  | { kind: "item"; item: CodexTranscriptItem }
-  | { kind: "tool_group"; id: string; tools: CodexToolMessage[] }
 
 function AuthControl({
   authState,
@@ -399,36 +396,6 @@ function ToolGroupCard({ tools }: { tools: CodexToolMessage[] }) {
       </div>
     </details>
   )
-}
-
-function buildTranscriptRows(messages: CodexTranscriptItem[], compactTools: boolean): TranscriptRenderRow[] {
-  if (!compactTools) {
-    return messages.map((item) => ({ kind: "item", item }))
-  }
-
-  const rows: TranscriptRenderRow[] = []
-  let index = 0
-  while (index < messages.length) {
-    const item = messages[index]
-    if (item?.type !== "tool") {
-      rows.push({ kind: "item", item })
-      index += 1
-      continue
-    }
-
-    const tools: CodexToolMessage[] = []
-    while (index < messages.length && messages[index]?.type === "tool") {
-      tools.push(messages[index] as CodexToolMessage)
-      index += 1
-    }
-
-    if (tools.length === 1) {
-      rows.push({ kind: "item", item: tools[0]! })
-    } else {
-      rows.push({ kind: "tool_group", id: `tool-group:${tools[0]?.id}`, tools })
-    }
-  }
-  return rows
 }
 
 function defaultCopy(text: string) {
@@ -1016,6 +983,10 @@ export function CodexChat({
   authState,
   headerControls,
   promptRequest,
+  errorState,
+  theme = "light",
+  density = "comfortable",
+  transcriptWindowSize = 300,
   onSubmit,
   onCancel,
   onAuthenticate,
@@ -1029,6 +1000,7 @@ export function CodexChat({
   onOpenExternalLink,
   onCopyText,
   onPromptResolve,
+  onErrorAction,
   quickPrompts = [],
   className,
   maxAttachments = 12,
@@ -1050,6 +1022,11 @@ export function CodexChat({
 
   const imageCount = useMemo(() => attachments.filter((attachment) => attachment.kind === "image").length, [attachments])
   const transcriptRows = useMemo(() => buildTranscriptRows(messages, compactTools), [compactTools, messages])
+  const windowedTranscriptRows = useMemo(() => {
+    if (!transcriptWindowSize || transcriptRows.length <= transcriptWindowSize) return transcriptRows
+    return transcriptRows.slice(-transcriptWindowSize)
+  }, [transcriptRows, transcriptWindowSize])
+  const hiddenTranscriptRowCount = transcriptRows.length - windowedTranscriptRows.length
   const handlers: LinkHandlers = {
     onUndoChanges,
     onReviewChanges,
@@ -1154,7 +1131,7 @@ export function CodexChat({
 
   return (
     <section
-      className={`codex-chat ${showActivityPanel ? "has-activity" : ""} ${className ?? ""}`}
+      className={`codex-chat theme-${theme} density-${density} ${showActivityPanel ? "has-activity" : ""} ${className ?? ""}`}
       onDragOver={(event) => {
         event.preventDefault()
         setDragActive(true)
@@ -1188,7 +1165,13 @@ export function CodexChat({
       <div className="codex-chat-shell">
         <main className="codex-chat-main">
           <div ref={transcriptRef} className="codex-transcript" aria-live="polite">
-            {transcriptRows.map((row) => (
+            {hiddenTranscriptRowCount > 0 ? (
+              <div className="codex-window-notice">
+                Showing latest {windowedTranscriptRows.length} transcript row{windowedTranscriptRows.length === 1 ? "" : "s"}.
+                {` ${hiddenTranscriptRowCount} older row${hiddenTranscriptRowCount === 1 ? "" : "s"} hidden for performance.`}
+              </div>
+            ) : null}
+            {windowedTranscriptRows.map((row) => (
               row.kind === "tool_group" ? (
                 <ToolGroupCard key={row.id} tools={row.tools} />
               ) : (
@@ -1205,6 +1188,19 @@ export function CodexChat({
           </div>
 
           <div className="codex-composer-wrap">
+            {errorState ? (
+              <div className="codex-error-banner" role="status">
+                <div>
+                  <strong>{errorState.title}</strong>
+                  {errorState.message ? <p>{errorState.message}</p> : null}
+                </div>
+                {errorState.actionLabel ? (
+                  <button type="button" onClick={() => void onErrorAction?.()}>
+                    {errorState.actionLabel}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {quickPrompts.length > 0 && messages.length < 3 ? (
               <div className="codex-quick-prompts">
                 {quickPrompts.map((prompt) => (

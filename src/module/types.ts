@@ -30,6 +30,15 @@ export interface CodexAuthState {
   userCode?: string
 }
 
+export type CodexChatTheme = "light" | "dark" | "system"
+export type CodexChatDensity = "compact" | "comfortable"
+
+export interface CodexErrorState {
+  title: string
+  message?: string
+  actionLabel?: string
+}
+
 export interface CodexFileChange {
   path: string
   additions: number
@@ -141,6 +150,10 @@ export interface CodexChatProps {
   authState?: CodexAuthState
   headerControls?: ReactNode
   promptRequest?: CodexPromptRequest | null
+  errorState?: CodexErrorState | null
+  theme?: CodexChatTheme
+  density?: CodexChatDensity
+  transcriptWindowSize?: number | null
   onSubmit: (payload: CodexChatSubmitPayload) => void | Promise<void>
   onCancel?: () => void
   onAuthenticate?: (apiKey: string) => void | Promise<void>
@@ -154,6 +167,7 @@ export interface CodexChatProps {
   onOpenExternalLink?: (href: string) => void | Promise<void>
   onCopyText?: (text: string) => void | Promise<void>
   onPromptResolve?: (request: CodexPromptRequest, choice: CodexPromptChoice) => void | Promise<void>
+  onErrorAction?: () => void | Promise<void>
   quickPrompts?: string[]
   className?: string
   maxAttachments?: number
