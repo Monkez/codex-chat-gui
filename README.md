@@ -66,9 +66,17 @@ The demo also shows host callbacks for `onOpenFile`, `onRevealFile`, `onOpenFile
 ### Host Integration Points
 
 - `headerControls` lets a host app inject model, reasoning, permission, or project controls into the chat header.
-- `promptRequest` + `onPromptResolve` render a modal for approvals and user choices without coupling the UI to a backend.
+- `promptRequest` + `onPromptResolve` render an accessible modal for approvals and user choices without coupling the UI to a backend. Use `defaultChoiceId` and `cancelChoiceId` to control keyboard defaults and Escape/backdrop behavior.
 - File and link callbacks are host-owned. The web UI never opens Windows Explorer directly; Electron, Tauri, or a local bridge should implement those actions.
 - Transcript item ids should be scoped per agent turn/run so later SDK events do not overwrite messages from earlier user prompts.
+- File-change line counts should be marked with `statsKind: "exact"` only when the host has real diff stats. Use `statsKind: "unavailable"` to render changed files without misleading `+/-` counts.
+
+## Performance Notes
+
+- The UI groups only adjacent tool events, so text guidance can still appear between tool batches.
+- Assistant text uses a lightweight typewriter effect for short/medium responses and skips animation for long markdown or `prefers-reduced-motion`.
+- The demo bridge reuses one Codex SDK client and does not send raw SDK events to the browser unless `includeRawEvents` is explicitly set.
+- The demo SSE parser supports multi-line `data:` frames and processes a final frame even if the stream closes without a trailing delimiter.
 
 ## Auth
 

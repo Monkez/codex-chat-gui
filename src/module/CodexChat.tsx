@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent, MouseEvent, ReactNode } from "react"
 import ReactMarkdown from "react-markdown"
 import type { Components } from "react-markdown"
@@ -184,26 +184,78 @@ function PromptDialog({
   request: CodexPromptRequest
   onResolve?: (request: CodexPromptRequest, choice: CodexPromptChoice) => void | Promise<void>
 }) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const resolveChoice = useCallback((choice: CodexPromptChoice | undefined) => {
+    if (!choice) return
+    void onResolve?.(request, choice)
+  }, [onResolve, request])
+  const cancelChoice = request.choices.find((choice) => choice.id === request.cancelChoiceId)
+  const defaultChoice = request.choices.find((choice) => choice.id === request.defaultChoiceId)
+    ?? request.choices.find((choice) => choice.tone === "primary")
+    ?? request.choices[0]
+  const describedBy = request.message || request.detail ? `codex-dialog-desc-${request.id}` : undefined
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return undefined
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"))
+      .filter((element) => !element.hasAttribute("disabled"))
+    const initial = defaultChoice
+      ? focusable.find((element) => element.dataset.choiceId === defaultChoice.id)
+      : focusable[0]
+    initial?.focus()
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        resolveChoice(cancelChoice ?? defaultChoice)
+        return
+      }
+      if (event.key !== "Tab" || focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown)
+    return () => document.removeEventListener("keydown", handleKeyDown)
+  }, [cancelChoice, defaultChoice, resolveChoice])
+
   return (
-    <div className="codex-dialog-backdrop" role="presentation">
+    <div
+      className="codex-dialog-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) resolveChoice(cancelChoice)
+      }}
+    >
       <section
+        ref={dialogRef}
         className={`codex-dialog codex-dialog-${request.variant ?? "default"}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={`codex-dialog-title-${request.id}`}
+        aria-describedby={describedBy}
       >
         <header>
           <strong id={`codex-dialog-title-${request.id}`}>{request.title}</strong>
-          {request.message ? <p>{request.message}</p> : null}
+          {request.message ? <p id={`codex-dialog-desc-${request.id}`}>{request.message}</p> : null}
         </header>
-        {request.detail ? <pre>{request.detail}</pre> : null}
+        {request.detail ? <pre id={request.message ? undefined : `codex-dialog-desc-${request.id}`}>{request.detail}</pre> : null}
         <div className="codex-dialog-actions">
           {request.choices.map((choice) => (
             <button
               key={choice.id}
               type="button"
+              data-choice-id={choice.id}
               className={`tone-${choice.tone ?? "secondary"}`}
-              onClick={() => void onResolve?.(request, choice)}
+              onClick={() => resolveChoice(choice)}
             >
               {choice.label}
             </button>
@@ -532,6 +584,7 @@ function FileChangesCard({
   const [expanded, setExpanded] = useState(false)
   const totalAdditions = item.files.reduce((sum, file) => sum + file.additions, 0)
   const totalDeletions = item.files.reduce((sum, file) => sum + file.deletions, 0)
+  const hasExactStats = item.files.some((file) => file.statsKind !== "unavailable")
   const visibleFiles = expanded ? item.files : item.files.slice(0, 3)
   const hiddenCount = Math.max(0, item.files.length - visibleFiles.length)
 
@@ -543,10 +596,14 @@ function FileChangesCard({
         </span>
         <div>
           <strong>{item.title ?? `Edited ${item.files.length} files`}</strong>
-          <p>
-            <span className="codex-addition">+{totalAdditions.toLocaleString()}</span>
-            <span className="codex-deletion"> -{totalDeletions.toLocaleString()}</span>
-          </p>
+          {hasExactStats ? (
+            <p>
+              <span className="codex-addition">+{totalAdditions.toLocaleString()}</span>
+              <span className="codex-deletion"> -{totalDeletions.toLocaleString()}</span>
+            </p>
+          ) : (
+            <p>{item.files.length} changed file{item.files.length === 1 ? "" : "s"}</p>
+          )}
         </div>
         <div className="codex-file-change-actions">
           {item.canUndo ? (
@@ -571,10 +628,14 @@ function FileChangesCard({
             onContextMenu={(event) => onFileContextMenu(event, file.path)}
           >
             <span>{file.path}</span>
-            <small>
-              <span className="codex-addition">+{file.additions}</span>
-              <span className="codex-deletion"> -{file.deletions}</span>
-            </small>
+            {file.statsKind === "unavailable" ? (
+              <small>{file.changeType ?? "changed"}</small>
+            ) : (
+              <small>
+                <span className="codex-addition">+{file.additions}</span>
+                <span className="codex-deletion"> -{file.deletions}</span>
+              </small>
+            )}
           </button>
         ))}
         {hiddenCount > 0 ? (
@@ -623,12 +684,15 @@ function FileLinkCard({
 }
 
 function useTypewriterText(content: string, enabled: boolean) {
-  const [visibleContent, setVisibleContent] = useState(() => (enabled ? "" : content))
+  const shouldAnimate = enabled
+    && content.length <= 2400
+    && !(typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
+  const [visibleContent, setVisibleContent] = useState(() => (shouldAnimate ? "" : content))
   const targetRef = useRef(content)
 
   useEffect(() => {
     targetRef.current = content
-    if (!enabled) {
+    if (!shouldAnimate) {
       setVisibleContent(content)
       return undefined
     }
@@ -644,16 +708,17 @@ function useTypewriterText(content: string, enabled: boolean) {
           window.clearInterval(timer)
           return current
         }
-        const nextLength = Math.min(target.length, current.length + 5)
+        const step = target.length > 1200 ? 18 : target.length > 500 ? 10 : 6
+        const nextLength = Math.min(target.length, current.length + step)
         return target.slice(0, nextLength)
       })
-    }, 18)
+    }, 32)
 
     return () => {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [content, enabled])
+  }, [content, shouldAnimate])
 
   return visibleContent
 }

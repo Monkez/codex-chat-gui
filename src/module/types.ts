@@ -35,6 +35,7 @@ export interface CodexFileChange {
   additions: number
   deletions: number
   changeType?: "added" | "modified" | "deleted" | "renamed"
+  statsKind?: "exact" | "unavailable"
 }
 
 export interface CodexLinkTarget {
@@ -114,6 +115,8 @@ export interface CodexPromptRequest {
   message?: string
   detail?: string
   variant?: CodexPromptVariant
+  defaultChoiceId?: string
+  cancelChoiceId?: string
   choices: CodexPromptChoice[]
 }
 

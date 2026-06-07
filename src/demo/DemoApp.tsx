@@ -47,6 +47,30 @@ const initialMessages: CodexTranscriptItem[] = [
   },
 ]
 
+function parseSseFrame(frame: string) {
+  let eventName = "message"
+  const dataLines: string[] = []
+  for (const line of frame.split(/\r?\n/)) {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim()
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart())
+    }
+  }
+  if (dataLines.length === 0) return null
+  try {
+    return {
+      eventName,
+      data: JSON.parse(dataLines.join("\n")),
+    }
+  } catch {
+    return {
+      eventName: "error",
+      data: { message: dataLines.join("\n") },
+    }
+  }
+}
+
 function RunSettingsControl({
   settings,
   disabled,
@@ -174,6 +198,7 @@ export function DemoApp() {
     detail: "Connect your Codex account with the local Codex CLI device-login flow.",
   })
   const abortRef = useRef<AbortController | null>(null)
+  const loginPollRef = useRef<number | null>(null)
   const lastCodexErrorRef = useRef<string | null>(null)
 
   function appendStatus(label: string, detail?: string) {
@@ -215,9 +240,16 @@ export function DemoApp() {
 
   useEffect(() => {
     void refreshAuthStatus()
+    return () => {
+      if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
+    }
   }, [])
 
   async function handleStartAccountLogin() {
+    if (loginPollRef.current !== null) {
+      window.clearInterval(loginPollRef.current)
+      loginPollRef.current = null
+    }
     setAuthState({
       status: "checking",
       detail: "Starting Codex device login...",
@@ -242,26 +274,36 @@ export function DemoApp() {
         detail: payload.detail || "Open the verification page and approve Codex access.",
       })
 
-      const interval = window.setInterval(async () => {
-        const statusResponse = await fetch(`/api/codex/auth/device/${payload.loginId}/status`)
-        const statusPayload = await statusResponse.json() as {
-          done: boolean
-          detail?: string
-          auth?: { authenticated: boolean; detail?: string }
-        }
-        if (!statusPayload.done) return
-        window.clearInterval(interval)
-        if (statusPayload.auth?.authenticated) {
-          setAuthState({
-            status: "authenticated",
-            accountLabel: "Codex account",
-            detail: statusPayload.auth.detail,
-          })
-          appendStatus("Codex account connected", "Real SDK streaming is now enabled.")
-        } else {
+      loginPollRef.current = window.setInterval(async () => {
+        try {
+          const statusResponse = await fetch(`/api/codex/auth/device/${payload.loginId}/status`)
+          const statusPayload = await statusResponse.json() as {
+            done: boolean
+            detail?: string
+            auth?: { authenticated: boolean; detail?: string }
+          }
+          if (!statusPayload.done) return
+          if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
+          loginPollRef.current = null
+          if (statusPayload.auth?.authenticated) {
+            setAuthState({
+              status: "authenticated",
+              accountLabel: "Codex account",
+              detail: statusPayload.auth.detail,
+            })
+            appendStatus("Codex account connected", "Real SDK streaming is now enabled.")
+          } else {
+            setAuthState({
+              status: "error",
+              detail: statusPayload.detail || "Codex login did not complete.",
+            })
+          }
+        } catch (error) {
+          if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
+          loginPollRef.current = null
           setAuthState({
             status: "error",
-            detail: statusPayload.detail || "Codex login did not complete.",
+            detail: error instanceof Error ? error.message : String(error),
           })
         }
       }, 2000)
@@ -274,6 +316,10 @@ export function DemoApp() {
   }
 
   async function handleSignOut() {
+    if (loginPollRef.current !== null) {
+      window.clearInterval(loginPollRef.current)
+      loginPollRef.current = null
+    }
     await fetch("/api/codex/auth/logout", { method: "POST" }).catch(() => undefined)
     setAuthState({
       status: "signed_out",
@@ -316,22 +362,30 @@ export function DemoApp() {
         const { done, value } = await reader.read()
         if (done) break
         buffer += decoder.decode(value, { stream: true })
-        const parts = buffer.split("\n\n")
+        const parts = buffer.split(/\r?\n\r?\n/)
         buffer = parts.pop() ?? ""
         for (const part of parts) {
-          const eventName = part.match(/^event: (.+)$/m)?.[1]
-          const dataLine = part.match(/^data: (.+)$/m)?.[1]
-          if (!eventName || !dataLine) continue
-          const data = JSON.parse(dataLine)
-          if (eventName === "ui-message") {
-            upsertMessage(data as CodexTranscriptItem)
-          } else if (eventName === "thread") {
-            setThreadId(data.threadId)
-          } else if (eventName === "error") {
-            appendCodexError(data.message ?? String(data))
-          } else if (eventName === "done") {
+          const event = parseSseFrame(part)
+          if (!event) continue
+          if (event.eventName === "ui-message") {
+            upsertMessage(event.data as CodexTranscriptItem)
+          } else if (event.eventName === "thread") {
+            setThreadId(event.data.threadId)
+          } else if (event.eventName === "error") {
+            appendCodexError(event.data.message ?? String(event.data))
+          } else if (event.eventName === "done") {
             setRunLabel("Ready")
           }
+        }
+      }
+      if (buffer.trim()) {
+        const event = parseSseFrame(buffer)
+        if (event?.eventName === "ui-message") {
+          upsertMessage(event.data as CodexTranscriptItem)
+        } else if (event?.eventName === "thread") {
+          setThreadId(event.data.threadId)
+        } else if (event?.eventName === "error") {
+          appendCodexError(event.data.message ?? String(event.data))
         }
       }
     } catch (error) {
@@ -411,6 +465,8 @@ export function DemoApp() {
       message: "The agent wants to inspect the workspace before answering.",
       detail: "Command: Get-ChildItem -Force\nScope: current project only",
       variant: "approval",
+      defaultChoiceId: "allow",
+      cancelChoiceId: "deny",
       choices: [
         { id: "allow", label: "Allow once", tone: "primary" },
         { id: "deny", label: "Deny", tone: "secondary" },

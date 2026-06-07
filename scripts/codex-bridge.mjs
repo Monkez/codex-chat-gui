@@ -13,6 +13,7 @@ const activeLogins = new Map()
 const approvalPolicies = new Set(["never", "on-request", "on-failure", "untrusted"])
 const sandboxModes = new Set(["read-only", "workspace-write", "danger-full-access"])
 const reasoningEfforts = new Set(["minimal", "low", "medium", "high", "xhigh"])
+const codexClient = new Codex()
 
 function codexBin() {
   return process.platform === "win32"
@@ -109,6 +110,19 @@ function startDeviceLogin(res) {
   }
   activeLogins.set(loginId, login)
 
+  function scheduleCleanup() {
+    setTimeout(() => {
+      activeLogins.delete(loginId)
+      if (!login.done) {
+        try {
+          login.child.kill()
+        } catch {
+          // ignore
+        }
+      }
+    }, 10 * 60 * 1000).unref?.()
+  }
+
   function maybeRespond() {
     if (responded) return
     const parsed = parseDeviceOutput(output)
@@ -141,10 +155,12 @@ function startDeviceLogin(res) {
       responded = true
       sendJson(res, 500, { ok: false, error: error.message })
     }
+    scheduleCleanup()
   })
   child.on("close", (code) => {
     login.done = true
     login.code = code ?? 1
+    scheduleCleanup()
     if (!responded) {
       responded = true
       sendJson(res, code === 0 ? 200 : 500, {
@@ -256,13 +272,14 @@ function sdkItemToUiMessage(item, eventType, runId) {
       return {
         id,
         type: "file_changes",
-        title: `Edited ${item.changes.length} files`,
+        title: `Changed ${item.changes.length} files`,
         canUndo: true,
         canReview: true,
         files: item.changes.map((change) => ({
           path: change.path,
-          additions: change.kind === "delete" ? 0 : 1,
-          deletions: change.kind === "delete" ? 1 : 0,
+          additions: 0,
+          deletions: 0,
+          statsKind: "unavailable",
           changeType: change.kind === "add" ? "added" : change.kind === "delete" ? "deleted" : "modified",
         })),
         createdAt,
@@ -328,6 +345,7 @@ async function handleRun(req, res) {
       : "low"
     const modelReasoningEffort = requestedReasoningEffort === "minimal" ? "low" : requestedReasoningEffort
     const networkAccessEnabled = Boolean(body.networkAccessEnabled)
+    const includeRawEvents = Boolean(body.includeRawEvents)
     const threadOptions = {
       workingDirectory: rootDir,
       skipGitRepoCheck: true,
@@ -336,20 +354,15 @@ async function handleRun(req, res) {
       model,
       modelReasoningEffort,
       networkAccessEnabled,
+      webSearchMode: networkAccessEnabled ? "live" : "disabled",
     }
-    const codex = new Codex({
-      config: {
-        sandbox_mode: sandboxMode,
-        approval_policy: approvalPolicy,
-      },
-    })
     const thread = body.threadId
-      ? codex.resumeThread(String(body.threadId), threadOptions)
-      : codex.startThread(threadOptions)
+      ? codexClient.resumeThread(String(body.threadId), threadOptions)
+      : codexClient.startThread(threadOptions)
 
     const { events } = await thread.runStreamed(prompt, { signal: abortController.signal })
     for await (const event of events) {
-      writeSse(res, "codex-event", event)
+      if (includeRawEvents) writeSse(res, "codex-event", event)
       if ("item" in event) {
         const message = sdkItemToUiMessage(event.item, event.type, runId)
         if (message) writeSse(res, "ui-message", message)
