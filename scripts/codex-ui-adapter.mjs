@@ -13,6 +13,11 @@ export function cleanCodexErrorMessage(value) {
       : JSON.stringify(value)
   const raw = stripAnsi(rawValue)
 
+  if (raw.includes("requires a newer version of Codex")
+    || (raw.includes("failed to load models cache") && raw.includes("unknown variant `max`"))) {
+    return "This model requires a newer local Codex runtime. Close the app and run run.bat again (or npm install), then retry."
+  }
+
   if (raw.includes("reasoning.effort 'minimal'")) {
     return "Thinking 'minimal' is not compatible with the active Codex tools in this session. The demo now uses Thinking 'low' as the fastest compatible mode."
   }

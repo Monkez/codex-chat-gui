@@ -35,6 +35,16 @@ test("cleanCodexErrorMessage removes warning noise", () => {
   assert.equal(message, "Codex Exec exited with code 1: useful")
 })
 
+test("cleanCodexErrorMessage explains outdated model cache once", () => {
+  const message = cleanCodexErrorMessage("failed to load models cache: unknown variant `max`, expected one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`")
+  assert.equal(message, "This model requires a newer local Codex runtime. Close the app and run run.bat again (or npm install), then retry.")
+})
+
+test("cleanCodexErrorMessage explains a model version requirement", () => {
+  const message = cleanCodexErrorMessage("The 'gpt-5.6-sol' model requires a newer version of Codex.")
+  assert.equal(message, "This model requires a newer local Codex runtime. Close the app and run run.bat again (or npm install), then retry.")
+})
+
 test("stripAnsi removes terminal color sequences from Codex CLI output", () => {
   const message = stripAnsi("Welcome \u001b[90m0.13.0\u001b[0m [94mhttps://auth.openai.com/codex/device[0m")
 

@@ -26,6 +26,7 @@
     "esbuild": "0.27.2"
   },
   "scripts": {
+    "predev": "node scripts/runtime-compat.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:ui": "vite --host 127.0.0.1",
     "dev:bridge": "node scripts/codex-bridge.mjs",
@@ -44,7 +45,7 @@
     "react-dom": ">=18.2 <20"
   },
   "devDependencies": {
-    "@openai/codex-sdk": "^0.137.0",
+    "@openai/codex-sdk": "^0.144.6",
     "@types/react": "^19.2.3",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",

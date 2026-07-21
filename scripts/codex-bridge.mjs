@@ -26,6 +26,13 @@ const allowDangerFullAccess = process.env.CODEX_ALLOW_DANGER_FULL_ACCESS === "1"
 const allowNeverApproval = process.env.CODEX_ALLOW_NEVER_APPROVAL === "1"
 const maxConcurrentRuns = Math.max(1, Number(process.env.CODEX_MAX_CONCURRENT_RUNS ?? 2))
 const uploadRoot = path.join(rootDir, ".codex-chat-ui", "uploads")
+const codexVersion = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(rootDir, "node_modules", "@openai", "codex", "package.json"), "utf8")).version
+  } catch {
+    return "unknown"
+  }
+})()
 const activeLogins = new Map()
 let activeRuns = 0
 const approvalPolicies = new Set(["never", "on-request", "on-failure", "untrusted"])
@@ -390,6 +397,7 @@ const server = http.createServer(async (req, res) => {
           neverApproval: allowNeverApproval,
           attachments: true,
           maxConcurrentRuns,
+          codexVersion,
         },
       })
       return

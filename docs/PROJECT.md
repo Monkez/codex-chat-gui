@@ -18,6 +18,7 @@ Codex Chat UI là một module React có thể nhúng vào web, Electron hoặc 
 - `src/demo`: host mẫu kết nối component với local bridge.
 - `scripts/codex-ui-adapter.mjs`: chuyển SDK item thành transcript item.
 - `scripts/codex-bridge.mjs`: auth, SDK runtime, SSE và host file actions.
+- `scripts/runtime-compat.mjs`: kiểm tra runtime Codex trước khi khởi động và chặn phiên bản quá cũ.
 - `tests`: unit/integration tests không phụ thuộc browser.
 - `docs`: tài liệu dành cho người tích hợp và vận hành.
 - `agents`: trạng thái kỹ thuật ngắn gọn cho các lượt phát triển tiếp theo.
@@ -29,4 +30,5 @@ Codex Chat UI là một module React có thể nhúng vào web, Electron hoặc 
 3. Component không làm mất draft nếu submit thất bại và không ép auto-scroll khi người dùng đang đọc lịch sử.
 4. Giao diện hiển thị rõ tiến trình, responsive và dùng được bằng bàn phím.
 5. Build, tests và package dry-run đều thành công.
+6. Runtime Codex cục bộ được kiểm tra trước khi chạy; giao diện hiển thị phiên bản để dễ chẩn đoán lỗi tương thích.
 

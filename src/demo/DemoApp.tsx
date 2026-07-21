@@ -180,6 +180,10 @@ function RunSettingsControl({
               <option value="compact">Compact</option>
             </select>
           </label>
+          <div className="codex-runtime-version">
+            <span>Local runtime</span>
+            <strong>Codex {capabilities?.codexVersion ?? "checking…"}</strong>
+          </div>
         </div>
       ) : null}
     </div>
@@ -244,6 +248,9 @@ export function DemoApp() {
   }
 
   function upsertMessage(message: CodexTranscriptItem) {
+    if (message.type === "status" && message.status === "error" && message.detail) {
+      lastCodexErrorRef.current = message.detail
+    }
     setMessages((current) => {
       const index = current.findIndex((item) => item.id === message.id)
       if (index === -1) return [...current, message]

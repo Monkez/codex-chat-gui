@@ -245,6 +245,21 @@ button:disabled {
   color: var(--muted);
 }
 
+.codex-runtime-version {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--line);
+  padding: 10px 2px 1px;
+  color: var(--muted);
+  font-size: var(--font-xs);
+}
+
+.codex-runtime-version strong {
+  color: var(--muted-strong);
+  font-weight: 700;
+}
+
 .codex-run-settings-popover label {
   display: grid;
   gap: 5px;

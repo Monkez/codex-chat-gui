@@ -2,7 +2,7 @@
 
 ## Nhánh hiện tại
 
-`codex/production-ready-chat-ui`
+`main`
 
 ## Đã hoàn thành
 
@@ -11,10 +11,12 @@
 - Activity panel và auth control đã tách thành component riêng.
 - UI có run trace, metrics, draft rollback, attachment limits và conditional auto-scroll.
 - Đã thêm tài liệu, validation boundary và Windows helper scripts.
+- Codex SDK/CLI đã nâng lên 0.144.6; `run.bat` tự kiểm tra và cập nhật runtime cũ.
+- Settings hiển thị phiên bản runtime; lỗi model cache cũ được gom thành một hướng dẫn xử lý rõ ràng.
 
 ## Kiểm chứng cuối
 
-- 15/15 tests pass.
+- 19/19 tests pass.
 - Demo build và library build pass.
 - Package dry-run pass, có CSS và type declarations.
 - Dependency audit: 0 vulnerability.

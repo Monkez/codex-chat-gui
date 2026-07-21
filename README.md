@@ -11,7 +11,7 @@ setup.bat
 run.bat
 ```
 
-`run.bat` keeps the Vite UI and local Codex bridge in one terminal. The app is available only on the local machine at `http://127.0.0.1:5173`.
+`run.bat` keeps the Vite UI and local Codex bridge in one terminal. The app is available only on the local machine at `http://127.0.0.1:5173`. It also checks the bundled Codex runtime before startup and updates project dependencies when the installed version is too old.
 
 The cross-platform commands are:
 
@@ -154,6 +154,12 @@ The bridge is a privileged local service. It therefore:
 For a controlled local environment, set `CODEX_ALLOW_DANGER_FULL_ACCESS=1` or `CODEX_ALLOW_NEVER_APPROVAL=1` before starting the bridge. Do not enable these flags for a shared machine.
 
 Additional design and security notes live in `docs/PROJECT.md` and `docs/SECURITY.md`.
+
+## Troubleshooting
+
+If a model reports that it requires a newer Codex version, or the model cache cannot read the `max` reasoning variant, stop the running app and launch `run.bat` again. The launcher updates the local project runtime automatically. You can also run `setup.bat` explicitly.
+
+See `docs/TROUBLESHOOTING.md` for diagnosis steps and recovery commands.
 
 ## Notes From Kanna
 

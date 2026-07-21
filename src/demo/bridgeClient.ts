@@ -5,6 +5,7 @@ export interface BridgeCapabilities {
   neverApproval: boolean
   attachments: boolean
   maxConcurrentRuns: number
+  codexVersion: string
 }
 
 interface BridgeSession {
