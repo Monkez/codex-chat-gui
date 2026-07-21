@@ -9,6 +9,8 @@ Codex Chat UI là một module React có thể nhúng vào web, Electron hoặc 
 - Gọn ở trạng thái bình thường, mở rộng chi tiết khi người dùng cần.
 - Mọi hành động nhạy cảm do host quyết định; component UI không tự truy cập hệ điều hành.
 - Tiến trình phải dễ hiểu: đang chuẩn bị, đang chạy công cụ, đang thay đổi file hay đã hoàn tất.
+- Popover và dialog phải có lớp hiển thị độc lập, nền đặc và luôn nằm trên transcript để nội dung không xuyên qua.
+- Typography ưu tiên font hệ thống dạng variable, độ tương phản rõ và giữ subpixel rendering mặc định của nền tảng.
 - Ranh giới giữa UI, transport, adapter SDK và runtime phải độc lập để dễ thay thế.
 - Local bridge chỉ phục vụ loopback, yêu cầu session token và không tự nâng quyền từ dữ liệu trình duyệt.
 

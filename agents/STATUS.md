@@ -13,10 +13,12 @@
 - Đã thêm tài liệu, validation boundary và Windows helper scripts.
 - Codex SDK/CLI đã nâng lên 0.144.6; `run.bat` tự kiểm tra và cập nhật runtime cũ.
 - Settings hiển thị phiên bản runtime; lỗi model cache cũ được gom thành một hướng dẫn xử lý rõ ràng.
+- Header đã có stacking layer riêng để Settings/Auth popover luôn nằm trên transcript.
+- Typography dùng Segoe UI Variable Text khi có, tăng tương phản và giữ font smoothing mặc định để chữ sắc nét hơn.
 
 ## Kiểm chứng cuối
 
-- 19/19 tests pass.
+- 21/21 tests pass.
 - Demo build và library build pass.
 - Package dry-run pass, có CSS và type declarations.
 - Dependency audit: 0 vulnerability.

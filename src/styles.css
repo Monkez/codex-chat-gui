@@ -1,11 +1,14 @@
 :root {
   color-scheme: light;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Segoe UI Variable Text", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: #f2f4f3;
   color: #17202a;
+  font-kerning: normal;
+  font-optical-sizing: auto;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 * {
@@ -43,9 +46,9 @@ button:disabled {
   --surface-card: rgba(255, 255, 255, 0.72);
   --line: #dce3e0;
   --line-strong: #c5d0cc;
-  --text: #18221f;
-  --muted: #6c7974;
-  --muted-strong: #46544f;
+  --text: #111a17;
+  --muted: #596761;
+  --muted-strong: #35423e;
   --accent: #087965;
   --accent-strong: #08604f;
   --accent-soft: #e2f3ee;
@@ -68,6 +71,7 @@ button:disabled {
   min-height: 100vh;
   overflow: hidden;
   flex-direction: column;
+  color: var(--text);
   font-size: var(--font-base);
   background:
     radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
@@ -133,6 +137,8 @@ button:disabled {
 }
 
 .codex-chat-header {
+  position: relative;
+  z-index: 15;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -152,7 +158,7 @@ button:disabled {
   margin: 6px 0 2px;
   font-size: 20px;
   line-height: 1.12;
-  letter-spacing: 0;
+  letter-spacing: -0.012em;
 }
 
 .codex-chat-header p {
@@ -231,7 +237,9 @@ button:disabled {
   border-radius: var(--radius-lg);
   padding: 12px;
   background: var(--surface);
-  box-shadow: var(--shadow-soft);
+  box-shadow:
+    0 22px 54px rgba(24, 39, 34, 0.16),
+    0 3px 12px rgba(24, 39, 34, 0.08);
 }
 
 .codex-settings-intro {
@@ -266,7 +274,7 @@ button:disabled {
 }
 
 .codex-run-settings-popover label > span {
-  color: var(--muted);
+  color: var(--muted-strong);
   font-size: var(--font-xs);
   font-weight: 700;
   text-transform: uppercase;
@@ -503,6 +511,7 @@ button:disabled {
   background: var(--accent-soft);
   color: var(--text);
   font-size: var(--font-base);
+  font-weight: 450;
 }
 
 .codex-message-bubble p {
@@ -539,6 +548,7 @@ button:disabled {
   max-width: 760px;
   color: var(--text);
   font-size: var(--font-base);
+  font-weight: 450;
   line-height: 1.52;
   overflow-wrap: anywhere;
   word-break: normal;
