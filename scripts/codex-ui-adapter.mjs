@@ -31,7 +31,8 @@ export function cleanCodexErrorMessage(value) {
 }
 
 export function sdkItemToUiMessage(item, eventType, runId, now = Date.now()) {
-  const id = `${runId}:${item.id}`
+  if (!item || typeof item !== "object" || typeof item.type !== "string") return null
+  const id = `${runId}:${typeof item.id === "string" ? item.id : "event"}`
   switch (item.type) {
     case "agent_message":
       if (!item.text) return null
@@ -54,23 +55,28 @@ export function sdkItemToUiMessage(item, eventType, runId, now = Date.now()) {
         createdAt: now,
       }
     case "command_execution":
+      {
+      const command = typeof item.command === "string" ? item.command : ""
       return {
         id,
         type: "tool",
-        title: item.command.split(/\s+/).slice(0, 4).join(" ") || "Command",
+        title: command.split(/\s+/).slice(0, 4).join(" ") || "Command",
         status: item.status === "in_progress" ? "running" : item.status === "failed" ? "error" : "complete",
-        command: item.command,
+        command,
         output: item.aggregated_output,
         createdAt: now,
       }
+      }
     case "file_change":
+      {
+      const changes = Array.isArray(item.changes) ? item.changes : []
       return {
         id,
         type: "file_changes",
-        title: `Changed ${item.changes.length} files`,
+        title: `Changed ${changes.length} files`,
         canUndo: true,
         canReview: true,
-        files: item.changes.map((change) => ({
+        files: changes.filter((change) => change && typeof change.path === "string").map((change) => ({
           path: change.path,
           additions: 0,
           deletions: 0,
@@ -78,6 +84,7 @@ export function sdkItemToUiMessage(item, eventType, runId, now = Date.now()) {
           changeType: change.kind === "add" ? "added" : change.kind === "delete" ? "deleted" : "modified",
         })),
         createdAt: now,
+      }
       }
     case "web_search":
       return {

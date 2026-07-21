@@ -4,17 +4,28 @@ Reusable React chat UI module for web apps that need an agent transcript, file a
 
 ## Demo
 
+On Windows, the shortest path is:
+
+```text
+setup.bat
+run.bat
+```
+
+`run.bat` keeps the Vite UI and local Codex bridge in one terminal. The app is available only on the local machine at `http://127.0.0.1:5173`.
+
+The cross-platform commands are:
+
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`.
+Open `http://127.0.0.1:5173`.
 
 The dev command starts both services:
 
-- Vite UI on `http://localhost:5173`
-- Local Codex bridge on `http://localhost:8787`
+- Vite UI on `http://127.0.0.1:5173`
+- Local Codex bridge on `http://127.0.0.1:8787`
 
 Use **Connect Codex** in the header to sign in with your real Codex/ChatGPT account through `codex login --device-auth`. After login, prompts are sent to `@openai/codex-sdk` and streamed back into the chat UI.
 
@@ -55,6 +66,8 @@ function App() {
       theme="system"
       density="comfortable"
       transcriptWindowSize={300}
+      maxAttachmentSizeBytes={5 * 1024 * 1024}
+      maxTotalAttachmentBytes={20 * 1024 * 1024}
       onSubmit={async ({ content, attachments }) => {
         setMessages((current) => [
           ...current,
@@ -88,6 +101,8 @@ The demo also shows host callbacks for `onOpenFile`, `onRevealFile`, `onOpenFile
 - `theme`, `density`, and CSS variables support light/dark/system rendering and compact dashboards.
 - `errorState` + `onErrorAction` provide a reusable bridge/auth/usage-limit error banner.
 - `transcriptWindowSize` limits rendered transcript rows for long sessions. Pass `null` to render all rows.
+- Attachment count, per-file bytes, and total bytes are independently configurable. Failed submissions restore the draft instead of discarding it.
+- Auto-scroll follows live output only while the reader is near the bottom. A **Latest activity** control appears after they scroll up.
 - File and link callbacks are host-owned. The web UI never opens Windows Explorer directly; Electron, Tauri, or a local bridge should implement those actions.
 - Transcript item ids should be scoped per agent turn/run so later SDK events do not overwrite messages from earlier user prompts.
 - File-change line counts should be marked with `statsKind: "exact"` only when the host has real diff stats. Use `statsKind: "unavailable"` to render changed files without misleading `+/-` counts.
@@ -113,6 +128,32 @@ The browser never stores Codex credentials. The local bridge owns Codex auth/run
 ## Codex Adapter
 
 The demo bridge uses `scripts/codex-ui-adapter.mjs` to map Codex SDK items into `CodexTranscriptItem` records. Keeping this mapping separate from HTTP/SSE code makes it easier to reuse the adapter in Electron, Tauri, Next.js route handlers, or a local desktop bridge.
+
+## Attachments
+
+The demo sends browser attachments to the local bridge instead of displaying them only in the transcript:
+
+- Images are written to an isolated per-run directory and passed to the Codex SDK as `local_image` inputs.
+- Text and source files are decoded into labeled text context.
+- Other files are exposed to the run as temporary workspace files.
+- Temporary files are removed after the turn finishes or is cancelled.
+
+The default limits are 12 files, 5 MB per file, and 20 MB total.
+
+## Local Bridge Security
+
+The bridge is a privileged local service. It therefore:
+
+- Binds to loopback rather than the LAN.
+- Creates an ephemeral session token required by every operational API route.
+- Rejects browser origins outside the configured allowlist.
+- Caps request, prompt, attachment, and concurrent-run sizes.
+- Keeps file actions inside the project workspace.
+- Disables `danger-full-access` and the `never` approval policy unless an administrator explicitly enables them.
+
+For a controlled local environment, set `CODEX_ALLOW_DANGER_FULL_ACCESS=1` or `CODEX_ALLOW_NEVER_APPROVAL=1` before starting the bridge. Do not enable these flags for a shared machine.
+
+Additional design and security notes live in `docs/PROJECT.md` and `docs/SECURITY.md`.
 
 ## Notes From Kanna
 

@@ -11,8 +11,15 @@ import {
   type CodexChatTheme,
   type CodexTranscriptItem,
   parseSseFrame,
+  isCodexTranscriptItem,
 } from "../module"
 import { createUserMessage } from "./mockAgent"
+import {
+  bridgeFetch,
+  getBridgeSession,
+  serializeAttachments,
+  type BridgeCapabilities,
+} from "./bridgeClient"
 
 type CodexApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted"
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access"
@@ -32,9 +39,9 @@ const defaultRunSettings: RunSettings = {
   model: "",
   reasoningEffort: "low",
   sandboxMode: "workspace-write",
-  approvalPolicy: "never",
+  approvalPolicy: "on-request",
   networkAccessEnabled: false,
-  theme: "light",
+  theme: "system",
   density: "comfortable",
 }
 
@@ -43,24 +50,32 @@ const initialMessages: CodexTranscriptItem[] = [
     id: "welcome",
     type: "assistant",
     content: [
-      "This demo shows a Codex-style chat UI module.",
+      "Welcome to **Codex Chat UI** — a focused workspace for collaborating with a coding agent.",
       "",
-      "It includes auth state, compact reasoning, command history, edited files, Undo/Review actions, file links, web-link context menus, attachments and image preview.",
+      "Follow the live process from planning to tools and changed files. Expand any step when you need detail, or keep the timeline compact while you work.",
       "",
-      "Right-click the generated file link after sending a prompt to test file actions.",
+      "Attach screenshots or project files, then ask Codex to explain, review or implement a change.",
     ].join("\n"),
     status: "complete",
     createdAt: 0,
   },
 ]
 
+const QUICK_PROMPTS = [
+  "Explain the architecture and important flows",
+  "Review this project for reliability issues",
+  "Implement a small improvement and verify it",
+]
+
 function RunSettingsControl({
   settings,
   disabled,
+  capabilities,
   onChange,
 }: {
   settings: RunSettings
   disabled: boolean
+  capabilities: BridgeCapabilities | null
   onChange: (settings: RunSettings) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -81,7 +96,11 @@ function RunSettingsControl({
         <span>{settings.reasoningEffort}</span>
       </button>
       {open ? (
-        <div className="codex-run-settings-popover">
+        <div className="codex-run-settings-popover" role="dialog" aria-label="Agent run settings">
+          <div className="codex-settings-intro">
+            <strong>Run controls</strong>
+            <small>Choose how much the agent can inspect and change.</small>
+          </div>
           <label>
             <span>Model</span>
             <input
@@ -113,7 +132,7 @@ function RunSettingsControl({
             >
               <option value="read-only">Read only</option>
               <option value="workspace-write">Workspace write</option>
-              <option value="danger-full-access">Full access</option>
+              <option value="danger-full-access" disabled={!capabilities?.dangerFullAccess}>Full access (admin enabled)</option>
             </select>
           </label>
           <label>
@@ -123,7 +142,7 @@ function RunSettingsControl({
               disabled={disabled}
               onChange={(event) => update("approvalPolicy", event.target.value as CodexApprovalPolicy)}
             >
-              <option value="never">Never ask</option>
+              <option value="never" disabled={!capabilities?.neverApproval}>Never ask (admin enabled)</option>
               <option value="on-failure">Ask on failure</option>
               <option value="on-request">Ask on request</option>
               <option value="untrusted">Untrusted</option>
@@ -205,6 +224,7 @@ export function DemoApp() {
   const [threadId, setThreadId] = useState<string | null>(null)
   const [runSettings, setRunSettings] = useState<RunSettings>(defaultRunSettings)
   const [promptRequest, setPromptRequest] = useState<CodexPromptRequest | null>(null)
+  const [capabilities, setCapabilities] = useState<BridgeCapabilities | null>(null)
   const [authState, setAuthState] = useState<CodexAuthState>({
     status: "signed_out",
     detail: "Connect your Codex account with the local Codex CLI device-login flow.",
@@ -235,7 +255,9 @@ export function DemoApp() {
 
   async function refreshAuthStatus() {
     try {
-      const response = await fetch("/api/codex/auth/status")
+      const session = await getBridgeSession()
+      setCapabilities(session.capabilities)
+      const response = await bridgeFetch("/api/codex/auth/status")
       const payload = await response.json() as { authenticated: boolean; status: CodexAuthState["status"]; detail?: string }
       setAuthState({
         status: payload.authenticated ? "authenticated" : "signed_out",
@@ -267,7 +289,7 @@ export function DemoApp() {
       detail: "Starting Codex device login...",
     })
     try {
-      const response = await fetch("/api/codex/auth/device/start", { method: "POST" })
+      const response = await bridgeFetch("/api/codex/auth/device/start", { method: "POST" })
       const payload = await response.json() as {
         ok: boolean
         loginId?: string
@@ -288,7 +310,7 @@ export function DemoApp() {
 
       loginPollRef.current = window.setInterval(async () => {
         try {
-          const statusResponse = await fetch(`/api/codex/auth/device/${payload.loginId}/status`)
+          const statusResponse = await bridgeFetch(`/api/codex/auth/device/${payload.loginId}/status`)
           const statusPayload = await statusResponse.json() as {
             done: boolean
             detail?: string
@@ -335,7 +357,7 @@ export function DemoApp() {
       window.clearInterval(loginPollRef.current)
       loginPollRef.current = null
     }
-    await fetch("/api/codex/auth/logout", { method: "POST" }).catch(() => undefined)
+    await bridgeFetch("/api/codex/auth/logout", { method: "POST" }).catch(() => undefined)
     setAuthState({
       status: "signed_out",
       detail: "Disconnected. Connect your Codex account again before running a real SDK session.",
@@ -343,18 +365,20 @@ export function DemoApp() {
     appendStatus("Signed out", "Demo credential state cleared.")
   }
 
-  async function runRealCodex(prompt: string) {
+  async function runRealCodex(prompt: string, attachments: CodexChatSubmitPayload["attachments"]) {
     const controller = new AbortController()
     abortRef.current = controller
     lastCodexErrorRef.current = null
     setRunning(true)
     setRunLabel("Starting Codex")
     try {
-      const response = await fetch("/api/codex/run", {
+      const serializedAttachments = await serializeAttachments(attachments)
+      const response = await bridgeFetch("/api/codex/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           prompt,
+          attachments: serializedAttachments,
           threadId,
           model: runSettings.model.trim() || undefined,
           modelReasoningEffort: runSettings.reasoningEffort,
@@ -383,7 +407,8 @@ export function DemoApp() {
           const event = parseSseFrame(part)
           if (!event) continue
           if (event.eventName === "ui-message") {
-            upsertMessage(event.data as CodexTranscriptItem)
+            if (isCodexTranscriptItem(event.data)) upsertMessage(event.data)
+            else appendCodexError("The local bridge returned an invalid transcript item.")
           } else if (event.eventName === "thread") {
             const nextThreadId = readPayloadField(event.data, "threadId")
             if (typeof nextThreadId === "string") setThreadId(nextThreadId)
@@ -398,7 +423,8 @@ export function DemoApp() {
       if (buffer.trim()) {
         const event = parseSseFrame(buffer)
         if (event?.eventName === "ui-message") {
-          upsertMessage(event.data as CodexTranscriptItem)
+          if (isCodexTranscriptItem(event.data)) upsertMessage(event.data)
+          else appendCodexError("The local bridge returned an invalid transcript item.")
         } else if (event?.eventName === "thread") {
           const nextThreadId = readPayloadField(event.data, "threadId")
           if (typeof nextThreadId === "string") setThreadId(nextThreadId)
@@ -425,7 +451,7 @@ export function DemoApp() {
       appendStatus("Connect Codex first", "Use Connect Codex in the header to authenticate with your real Codex account.")
       return
     }
-    await runRealCodex(payload.content)
+    await runRealCodex(payload.content, payload.attachments)
   }
 
   function handleCancel() {
@@ -440,31 +466,43 @@ export function DemoApp() {
     appendStatus("Review requested", `${message.files.length} changed files would open in the app review panel.`)
   }
 
-  function handleOpenFile(path: string, line?: number) {
-    void fetch("/api/host/file-action", {
+  async function requestFileAction(action: "open" | "reveal" | "open-with", path: string) {
+    const response = await bridgeFetch("/api/host/file-action", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "open", path }),
-    }).catch((error) => appendStatus("Open file failed", error instanceof Error ? error.message : String(error)))
-    appendStatus("Open file", line ? `${path}:${line}` : path)
+      body: JSON.stringify({ action, path }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({})) as { error?: string }
+      throw new Error(payload.error ?? `File action failed with status ${response.status}`)
+    }
   }
 
-  function handleRevealFile(path: string) {
-    void fetch("/api/host/file-action", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "reveal", path }),
-    }).catch((error) => appendStatus("Reveal failed", error instanceof Error ? error.message : String(error)))
-    appendStatus("Reveal in Explorer", `Host bridge should reveal ${path} in Windows Explorer.`)
+  async function handleOpenFile(path: string, line?: number) {
+    try {
+      await requestFileAction("open", path)
+      appendStatus("Opened file", line ? `${path}:${line}` : path)
+    } catch (error) {
+      appendStatus("Open file failed", error instanceof Error ? error.message : String(error))
+    }
   }
 
-  function handleOpenFileWith(path: string) {
-    void fetch("/api/host/file-action", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "open-with", path }),
-    }).catch((error) => appendStatus("Open with failed", error instanceof Error ? error.message : String(error)))
-    appendStatus("Open with", `Host bridge should show available apps for ${path}.`)
+  async function handleRevealFile(path: string) {
+    try {
+      await requestFileAction("reveal", path)
+      appendStatus("Revealed in Explorer", path)
+    } catch (error) {
+      appendStatus("Reveal failed", error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function handleOpenFileWith(path: string) {
+    try {
+      await requestFileAction("open-with", path)
+      appendStatus("Opened app picker", path)
+    } catch (error) {
+      appendStatus("Open with failed", error instanceof Error ? error.message : String(error))
+    }
   }
 
   function handleOpenExternalLink(href: string) {
@@ -525,6 +563,7 @@ export function DemoApp() {
           <RunSettingsControl
             settings={runSettings}
             disabled={isRunning}
+            capabilities={capabilities}
             onChange={setRunSettings}
           />
           <DemoPromptButton onClick={showDemoPrompt} />
@@ -544,6 +583,8 @@ export function DemoApp() {
       onCopyText={handleCopyText}
       onPromptResolve={handlePromptResolve}
       onErrorAction={refreshAuthStatus}
+      showActivityPanel
+      quickPrompts={QUICK_PROMPTS}
     />
   )
 }

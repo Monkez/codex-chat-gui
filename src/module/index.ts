@@ -2,7 +2,9 @@ import "./styles.css"
 
 export { CodexChat } from "./CodexChat"
 export { parseSseFrame } from "./sse"
-export { buildTranscriptRows } from "./transcriptRows"
+export { buildTranscriptRows, getCurrentTurnMessages } from "./transcriptRows"
+export { isCodexTranscriptItem } from "./validation"
+export { releaseAttachmentPreviews } from "./format"
 export type { TranscriptRenderRow } from "./transcriptRows"
 export type { ParsedSseFrame } from "./sse"
 export type {

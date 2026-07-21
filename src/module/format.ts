@@ -12,7 +12,7 @@ export function formatDuration(ms?: number) {
 }
 
 export function makeAttachment(file: File): import("./types").CodexChatAttachment {
-  const isImage = file.type.startsWith("image/")
+  const isImage = ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type)
   return {
     id: crypto.randomUUID(),
     name: file.name || "attachment",
@@ -22,4 +22,9 @@ export function makeAttachment(file: File): import("./types").CodexChatAttachmen
     url: isImage ? URL.createObjectURL(file) : undefined,
     file,
   }
+}
+
+export function releaseAttachmentPreviews(attachments: import("./types").CodexChatAttachment[]) {
+  const urls = new Set(attachments.map((attachment) => attachment.url).filter((url): url is string => Boolean(url)))
+  urls.forEach((url) => URL.revokeObjectURL(url))
 }

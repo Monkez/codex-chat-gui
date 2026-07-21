@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent, MouseEvent, ReactNode } from "react"
 import ReactMarkdown from "react-markdown"
 import type { Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
   ArrowUp,
+  ArrowDown,
   Bot,
   BrainCircuit,
   CheckCircle2,
@@ -21,8 +22,6 @@ import {
   Paperclip,
   RotateCcw,
   SearchCode,
-  ShieldCheck,
-  ShieldOff,
   TerminalSquare,
   Trash2,
   X,
@@ -30,21 +29,21 @@ import {
 import type {
   CodexChatAttachment,
   CodexAssistantMessage,
-  CodexAuthState,
   CodexFileChangeMessage,
   CodexFileLinkMessage,
   CodexChatProps,
   CodexChatSubmitPayload,
   CodexLinkTarget,
-  CodexPromptChoice,
-  CodexPromptRequest,
   CodexReasoningMessage,
   CodexRunStatus,
   CodexToolMessage,
   CodexTranscriptItem,
 } from "./types"
-import { formatBytes, formatDuration, makeAttachment } from "./format"
-import { buildTranscriptRows } from "./transcriptRows"
+import { formatBytes, formatDuration, makeAttachment, releaseAttachmentPreviews } from "./format"
+import { buildTranscriptRows, getCurrentTurnMessages } from "./transcriptRows"
+import { ActivityPanel } from "./components/ActivityPanel"
+import { AuthControl } from "./components/AuthControl"
+import { PromptDialog } from "./components/PromptDialog"
 
 const ACCEPTED_PASTE_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
@@ -71,197 +70,6 @@ type LinkHandlers = Pick<
   | "onUndoChanges"
   | "onReviewChanges"
 >
-
-function AuthControl({
-  authState,
-  onAuthenticate,
-  onStartAccountLogin,
-  onSignOut,
-}: {
-  authState?: CodexAuthState
-  onAuthenticate?: (apiKey: string) => void | Promise<void>
-  onStartAccountLogin?: () => void | Promise<void>
-  onSignOut?: () => void | Promise<void>
-}) {
-  const [apiKey, setApiKey] = useState("")
-  const [open, setOpen] = useState(false)
-  const [showApiKey, setShowApiKey] = useState(false)
-  const status = authState?.status ?? "unknown"
-  const isAuthenticated = status === "authenticated"
-  const isChecking = status === "checking"
-
-  async function submitAuth() {
-    const value = apiKey.trim()
-    if (!value) return
-    await onAuthenticate?.(value)
-    setApiKey("")
-    setOpen(false)
-  }
-
-  return (
-    <div className="codex-auth">
-      <button
-        type="button"
-        className={`codex-auth-button is-${status}`}
-        onClick={() => setOpen((current) => !current)}
-        title={isAuthenticated ? "Codex account connected" : "Connect Codex account"}
-      >
-        {isAuthenticated ? <ShieldCheck aria-hidden="true" /> : <ShieldOff aria-hidden="true" />}
-        <span>{isAuthenticated ? authState?.accountLabel ?? "Connected" : "Connect Codex"}</span>
-      </button>
-      {open ? (
-        <div className="codex-auth-popover">
-          <strong>{isAuthenticated ? "Codex authenticated" : "Authenticate Codex"}</strong>
-          <p>
-            {authState?.detail
-              ?? "Connect with your ChatGPT/Codex account using the local Codex CLI device-login flow."}
-          </p>
-          {authState?.verificationUrl || authState?.userCode ? (
-            <div className="codex-device-login">
-              {authState.verificationUrl ? (
-                <button
-                  type="button"
-                  className="codex-device-link"
-                  onClick={() => window.open(authState.verificationUrl, "_blank", "noopener,noreferrer")}
-                >
-                  Open verification page
-                </button>
-              ) : null}
-              {authState.userCode ? <code>{authState.userCode}</code> : null}
-            </div>
-          ) : null}
-          {isAuthenticated ? (
-            <button type="button" onClick={() => void onSignOut?.()}>
-              Sign out
-            </button>
-          ) : (
-            <>
-              {onStartAccountLogin ? (
-                <button type="button" onClick={() => void onStartAccountLogin()} disabled={isChecking}>
-                  {isChecking ? "Waiting..." : "Connect Codex account"}
-                </button>
-              ) : null}
-              {onAuthenticate ? (
-                <button type="button" className="codex-auth-secondary" onClick={() => setShowApiKey((current) => !current)}>
-                  Use API key
-                </button>
-              ) : null}
-              {showApiKey && onAuthenticate ? (
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    void submitAuth()
-                  }}
-                >
-                  <input
-                    type="password"
-                    value={apiKey}
-                    placeholder="sk-..."
-                    autoComplete="off"
-                    onChange={(event) => setApiKey(event.target.value)}
-                    disabled={isChecking}
-                  />
-                  <button type="submit" disabled={isChecking || !apiKey.trim()}>
-                    {isChecking ? "Checking..." : "Connect"}
-                  </button>
-                </form>
-              ) : null}
-            </>
-          )}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function PromptDialog({
-  request,
-  onResolve,
-}: {
-  request: CodexPromptRequest
-  onResolve?: (request: CodexPromptRequest, choice: CodexPromptChoice) => void | Promise<void>
-}) {
-  const dialogRef = useRef<HTMLElement>(null)
-  const resolveChoice = useCallback((choice: CodexPromptChoice | undefined) => {
-    if (!choice) return
-    void onResolve?.(request, choice)
-  }, [onResolve, request])
-  const cancelChoice = request.choices.find((choice) => choice.id === request.cancelChoiceId)
-  const defaultChoice = request.choices.find((choice) => choice.id === request.defaultChoiceId)
-    ?? request.choices.find((choice) => choice.tone === "primary")
-    ?? request.choices[0]
-  const describedBy = request.message || request.detail ? `codex-dialog-desc-${request.id}` : undefined
-
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return undefined
-    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"))
-      .filter((element) => !element.hasAttribute("disabled"))
-    const initial = defaultChoice
-      ? focusable.find((element) => element.dataset.choiceId === defaultChoice.id)
-      : focusable[0]
-    initial?.focus()
-
-    function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault()
-        resolveChoice(cancelChoice ?? defaultChoice)
-        return
-      }
-      if (event.key !== "Tab" || focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last?.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first?.focus()
-      }
-    }
-
-    document.addEventListener("keydown", handleKeyDown)
-    return () => document.removeEventListener("keydown", handleKeyDown)
-  }, [cancelChoice, defaultChoice, resolveChoice])
-
-  return (
-    <div
-      className="codex-dialog-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) resolveChoice(cancelChoice)
-      }}
-    >
-      <section
-        ref={dialogRef}
-        className={`codex-dialog codex-dialog-${request.variant ?? "default"}`}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={`codex-dialog-title-${request.id}`}
-        aria-describedby={describedBy}
-      >
-        <header>
-          <strong id={`codex-dialog-title-${request.id}`}>{request.title}</strong>
-          {request.message ? <p id={`codex-dialog-desc-${request.id}`}>{request.message}</p> : null}
-        </header>
-        {request.detail ? <pre id={request.message ? undefined : `codex-dialog-desc-${request.id}`}>{request.detail}</pre> : null}
-        <div className="codex-dialog-actions">
-          {request.choices.map((choice) => (
-            <button
-              key={choice.id}
-              type="button"
-              data-choice-id={choice.id}
-              className={`tone-${choice.tone ?? "secondary"}`}
-              onClick={() => resolveChoice(choice)}
-            >
-              {choice.label}
-            </button>
-          ))}
-        </div>
-      </section>
-    </div>
-  )
-}
 
 function getStatusTone(status?: CodexRunStatus) {
   if (status === "error") return "danger"
@@ -722,7 +530,8 @@ function AssistantMessageItem({
   }
   const content = item.content || " "
   const shouldAnimateText = item.id !== "welcome"
-    && (item.status === "streaming" || Date.now() - item.createdAt < 2500)
+    && item.status === "complete"
+    && Date.now() - item.createdAt < 2500
   const visibleContent = useTypewriterText(content, shouldAnimateText)
   const isTyping = visibleContent.length < content.length
 
@@ -813,73 +622,6 @@ function TranscriptItem({
   return <AssistantMessageItem item={item} handlers={handlers} contextActions={contextActions} />
 }
 
-function ActivityPanel({ messages, isRunning, runLabel }: {
-  messages: CodexTranscriptItem[]
-  isRunning: boolean
-  runLabel?: string
-}) {
-  const events = messages.filter((item) => (
-    item.type === "tool"
-    || item.type === "status"
-    || item.type === "reasoning"
-    || item.type === "file_changes"
-  )).slice(-8)
-  const runningTool = [...messages].reverse().find((item): item is CodexToolMessage => item.type === "tool" && item.status === "running")
-
-  return (
-    <aside className="codex-activity">
-      <div className="codex-activity-header">
-        <span className="codex-activity-icon">
-          <TerminalSquare aria-hidden="true" />
-        </span>
-        <div>
-          <strong>Agent activity</strong>
-          <small>{runningTool?.command ?? runLabel ?? (isRunning ? "Running" : "Idle")}</small>
-        </div>
-      </div>
-      <div className="codex-activity-list">
-        {events.length === 0 ? (
-          <p className="codex-muted">No commands yet.</p>
-        ) : events.map((item) => (
-          <div key={item.id} className="codex-activity-row">
-            <span
-              className={`codex-activity-dot ${
-                item.type === "tool"
-                  ? `is-${item.status}`
-                  : item.type === "status"
-                    ? `tone-${getStatusTone(item.status)}`
-                    : item.type === "reasoning" && item.status === "thinking"
-                      ? "is-running"
-                      : "is-complete"
-              }`}
-            />
-            <div>
-              <strong>
-                {item.type === "tool"
-                  ? item.title
-                  : item.type === "status"
-                    ? item.label
-                    : item.type === "reasoning"
-                      ? item.title
-                      : item.title ?? `Edited ${item.files.length} files`}
-              </strong>
-              <small>
-                {item.type === "tool"
-                  ? item.command
-                  : item.type === "status"
-                    ? item.detail
-                    : item.type === "reasoning"
-                      ? `${item.steps.length} compacted actions`
-                      : `${item.files.length} files changed`}
-              </small>
-            </div>
-          </div>
-        ))}
-      </div>
-    </aside>
-  )
-}
-
 function formatElapsedSeconds(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
@@ -898,11 +640,12 @@ function LiveWorkStrip({
 }) {
   const [startedAt, setStartedAt] = useState<number | null>(null)
   const [nowMs, setNowMs] = useState(Date.now())
-  const tools = messages.filter((item): item is CodexToolMessage => item.type === "tool")
+  const turnMessages = getCurrentTurnMessages(messages)
+  const tools = turnMessages.filter((item): item is CodexToolMessage => item.type === "tool")
   const runningTools = tools.filter((item) => item.status === "running")
   const commandCount = tools.filter((item) => item.command).length
-  const latestReasoning = [...messages].reverse().find((item) => item.type === "reasoning")
-  const latestFileChanges = [...messages].reverse().find((item) => item.type === "file_changes")
+  const latestReasoning = [...turnMessages].reverse().find((item) => item.type === "reasoning")
+  const latestFileChanges = [...turnMessages].reverse().find((item) => item.type === "file_changes")
 
   useEffect(() => {
     if (isRunning) {
@@ -1004,6 +747,8 @@ export function CodexChat({
   quickPrompts = [],
   className,
   maxAttachments = 12,
+  maxAttachmentSizeBytes = 5 * 1024 * 1024,
+  maxTotalAttachmentBytes = 20 * 1024 * 1024,
   compactTools = true,
   showActivityPanel = false,
 }: CodexChatProps) {
@@ -1012,12 +757,15 @@ export function CodexChat({
   const [isDragActive, setDragActive] = useState(false)
   const [preview, setPreview] = useState<CodexChatAttachment | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isSubmitting, setSubmitting] = useState(false)
+  const [isNearBottom, setIsNearBottom] = useState(true)
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const transcriptRef = useRef<HTMLDivElement>(null)
+  const previewCloseRef = useRef<HTMLButtonElement>(null)
   const draftAttachmentsRef = useRef<CodexChatAttachment[]>([])
-  const canSubmit = value.trim().length > 0 || attachments.length > 0
+  const canSubmit = (value.trim().length > 0 || attachments.length > 0) && !isSubmitting
   const statusTone = getStatusTone(runStatus)
 
   const imageCount = useMemo(() => attachments.filter((attachment) => attachment.kind === "image").length, [attachments])
@@ -1046,21 +794,36 @@ export function CodexChat({
   })
 
   useEffect(() => {
+    if (!isNearBottom) return
     transcriptRef.current?.scrollTo({
       top: transcriptRef.current.scrollHeight,
-      behavior: "smooth",
+      behavior: isRunning ? "auto" : "smooth",
     })
-  }, [messages])
+  }, [isNearBottom, isRunning, messages])
 
   useEffect(() => {
     draftAttachmentsRef.current = attachments
   }, [attachments])
 
   useEffect(() => () => {
-    draftAttachmentsRef.current.forEach((attachment) => {
-      if (attachment.url) URL.revokeObjectURL(attachment.url)
-    })
+    releaseAttachmentPreviews(draftAttachmentsRef.current)
   }, [])
+
+  useEffect(() => {
+    if (!preview) return undefined
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    previewCloseRef.current?.focus()
+    function closePreview(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      setPreview(null)
+    }
+    document.addEventListener("keydown", closePreview)
+    return () => {
+      document.removeEventListener("keydown", closePreview)
+      previousFocus?.focus()
+    }
+  }, [preview])
 
   function appendFiles(files: File[]) {
     if (files.length === 0) return
@@ -1070,8 +833,19 @@ export function CodexChat({
         setError(`Maximum ${maxAttachments} attachments per message.`)
         return current
       }
-      const nextFiles = files.slice(0, slots)
-      if (nextFiles.length < files.length) {
+      const sizeEligible = files.filter((file) => file.size <= maxAttachmentSizeBytes)
+      const currentBytes = current.reduce((sum, attachment) => sum + attachment.size, 0)
+      let nextBytes = currentBytes
+      const nextFiles = sizeEligible.slice(0, slots).filter((file) => {
+        if (nextBytes + file.size > maxTotalAttachmentBytes) return false
+        nextBytes += file.size
+        return true
+      })
+      if (sizeEligible.length < files.length) {
+        setError(`Each attachment must be ${formatBytes(maxAttachmentSizeBytes)} or smaller.`)
+      } else if (nextFiles.length < sizeEligible.slice(0, slots).length) {
+        setError(`Attachments may total up to ${formatBytes(maxTotalAttachmentBytes)} per message.`)
+      } else if (sizeEligible.length > slots) {
         setError(`Only ${slots} more attachment${slots === 1 ? "" : "s"} can be added.`)
       } else {
         setError(null)
@@ -1091,11 +865,22 @@ export function CodexChat({
     const submitAttachments = payload?.attachments ?? attachments
     if (!content && submitAttachments.length === 0) return
     const nextPayload = { content, attachments: submitAttachments }
+    const previousValue = value
+    const previousAttachments = attachments
+    setSubmitting(true)
     setValue("")
     setAttachments([])
     setError(null)
     textareaRef.current?.focus()
-    await onSubmit(nextPayload)
+    try {
+      await onSubmit(nextPayload)
+    } catch (submitError) {
+      setValue((current) => current || previousValue)
+      setAttachments((current) => current.length > 0 ? current : previousAttachments)
+      setError(submitError instanceof Error ? submitError.message : "Unable to send this message.")
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -1157,6 +942,7 @@ export function CodexChat({
               onAuthenticate={onAuthenticate}
               onStartAccountLogin={onStartAccountLogin}
               onSignOut={onSignOut}
+              onOpenExternalLink={onOpenExternalLink}
             />
           ) : null}
         </div>
@@ -1164,7 +950,16 @@ export function CodexChat({
 
       <div className="codex-chat-shell">
         <main className="codex-chat-main">
-          <div ref={transcriptRef} className="codex-transcript" aria-live="polite">
+          <div
+            ref={transcriptRef}
+            className="codex-transcript"
+            aria-live="polite"
+            aria-busy={isRunning}
+            onScroll={(event) => {
+              const element = event.currentTarget
+              setIsNearBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 96)
+            }}
+          >
             {hiddenTranscriptRowCount > 0 ? (
               <div className="codex-window-notice">
                 Showing latest {windowedTranscriptRows.length} transcript row{windowedTranscriptRows.length === 1 ? "" : "s"}.
@@ -1186,6 +981,20 @@ export function CodexChat({
             ))}
             <LiveWorkStrip messages={messages} isRunning={isRunning} runLabel={runLabel} />
           </div>
+
+          {!isNearBottom ? (
+            <button
+              type="button"
+              className="codex-jump-latest"
+              onClick={() => {
+                setIsNearBottom(true)
+                transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" })
+              }}
+            >
+              <ArrowDown aria-hidden="true" />
+              Latest activity
+            </button>
+          ) : null}
 
           <div className="codex-composer-wrap">
             {errorState ? (
@@ -1236,7 +1045,7 @@ export function CodexChat({
                 type="button"
                 className="codex-icon-button"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isRunning}
+                disabled={isRunning || isSubmitting}
                 aria-label="Attach files"
                 title="Attach files"
               >
@@ -1250,7 +1059,7 @@ export function CodexChat({
                 onChange={handleTextareaInput}
                 onPaste={handlePaste}
                 onKeyDown={handleKeyDown}
-                disabled={isRunning}
+                disabled={isRunning || isSubmitting}
               />
               <button
                 type="button"
@@ -1273,7 +1082,7 @@ export function CodexChat({
                 }}
               />
             </div>
-            {error ? <p className="codex-composer-error">{error}</p> : null}
+            {error ? <p className="codex-composer-error" role="alert">{error}</p> : null}
           </div>
         </main>
 
@@ -1289,7 +1098,7 @@ export function CodexChat({
 
       {preview?.kind === "image" && preview.url ? (
         <div className="codex-preview" role="dialog" aria-modal="true" aria-label={preview.name}>
-          <button type="button" className="codex-preview-close" onClick={() => setPreview(null)} aria-label="Close preview">
+          <button ref={previewCloseRef} type="button" className="codex-preview-close" onClick={() => setPreview(null)} aria-label="Close preview">
             <X aria-hidden="true" />
           </button>
           <img src={preview.url} alt={preview.name} />

@@ -6,7 +6,7 @@ const processes = [
     shell: process.platform === "win32",
     env: { ...process.env, CODEX_BRIDGE_PORT: process.env.CODEX_BRIDGE_PORT ?? "8787" },
   }),
-  spawn("vite", ["--host", "0.0.0.0"], {
+  spawn("vite", ["--host", "127.0.0.1"], {
     stdio: "inherit",
     shell: process.platform === "win32",
   }),

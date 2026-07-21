@@ -171,6 +171,8 @@ export interface CodexChatProps {
   quickPrompts?: string[]
   className?: string
   maxAttachments?: number
+  maxAttachmentSizeBytes?: number
+  maxTotalAttachmentBytes?: number
   compactTools?: boolean
   showActivityPanel?: boolean
 }

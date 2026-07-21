@@ -1,19 +1,39 @@
 import http from "node:http"
 import { spawn } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Codex } from "@openai/codex-sdk"
 import { cleanCodexErrorMessage, sdkItemToUiMessage, stripAnsi } from "./codex-ui-adapter.mjs"
+import {
+  MAX_PROMPT_CHARS,
+  decodeAttachments,
+  getAllowedOrigins,
+  hasValidSessionToken,
+  isAllowedOrigin,
+  readJsonBody,
+  resolveWorkspacePath,
+} from "./bridge-security.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, "..")
 const port = Number(process.env.CODEX_BRIDGE_PORT ?? 8787)
+const host = process.env.CODEX_BRIDGE_HOST ?? "127.0.0.1"
+const sessionToken = randomBytes(32).toString("base64url")
+const allowedOrigins = getAllowedOrigins(process.env.CODEX_ALLOWED_ORIGINS)
+const allowDangerFullAccess = process.env.CODEX_ALLOW_DANGER_FULL_ACCESS === "1"
+const allowNeverApproval = process.env.CODEX_ALLOW_NEVER_APPROVAL === "1"
+const maxConcurrentRuns = Math.max(1, Number(process.env.CODEX_MAX_CONCURRENT_RUNS ?? 2))
+const uploadRoot = path.join(rootDir, ".codex-chat-ui", "uploads")
 const activeLogins = new Map()
+let activeRuns = 0
 const approvalPolicies = new Set(["never", "on-request", "on-failure", "untrusted"])
 const sandboxModes = new Set(["read-only", "workspace-write", "danger-full-access"])
 const reasoningEfforts = new Set(["minimal", "low", "medium", "high", "xhigh"])
+const fileActions = new Set(["open", "reveal", "open-with"])
+const supportedImageMimeTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
+const maxInlineTextAttachmentBytes = 256 * 1024
 const codexClient = new Codex()
 
 function codexBin() {
@@ -22,32 +42,29 @@ function codexBin() {
     : path.join(rootDir, "node_modules", ".bin", "codex")
 }
 
-function sendJson(res, status, payload) {
+function securityHeaders(req) {
+  const origin = req.headers.origin
+  return {
+    ...(origin && allowedOrigins.has(origin) ? {
+      "access-control-allow-origin": origin,
+      vary: "Origin",
+    } : {}),
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type,x-codex-session",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+  }
+}
+
+function sendJson(req, res, status, payload) {
   const body = JSON.stringify(payload)
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
-    "access-control-allow-headers": "content-type",
+    ...securityHeaders(req),
   })
   res.end(body)
-}
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = []
-    req.on("data", (chunk) => chunks.push(chunk))
-    req.on("end", () => {
-      try {
-        const raw = Buffer.concat(chunks).toString("utf8")
-        resolve(raw ? JSON.parse(raw) : {})
-      } catch (error) {
-        reject(error)
-      }
-    })
-    req.on("error", reject)
-  })
 }
 
 function runCodex(args, options = {}) {
@@ -101,7 +118,7 @@ function deviceLoginDetail(parsed, fallbackOutput = "") {
   return fallback || "Waiting for Codex to provide a device login code..."
 }
 
-function startDeviceLogin(res) {
+function startDeviceLogin(req, res) {
   const loginId = randomUUID()
   const child = spawn(codexBin(), ["login", "--device-auth"], {
     cwd: rootDir,
@@ -138,7 +155,7 @@ function startDeviceLogin(res) {
     const parsed = parseDeviceOutput(output)
     if (!parsed.verificationUrl && !parsed.userCode && Date.now() - login.startedAt < 15000) return
     responded = true
-    sendJson(res, 200, {
+    sendJson(req, res, 200, {
       ok: true,
       loginId,
       ...parsed,
@@ -163,7 +180,7 @@ function startDeviceLogin(res) {
     login.code = 1
     if (!responded) {
       responded = true
-      sendJson(res, 500, { ok: false, error: error.message })
+      sendJson(req, res, 500, { ok: false, error: error.message })
     }
     scheduleCleanup()
   })
@@ -173,7 +190,7 @@ function startDeviceLogin(res) {
     scheduleCleanup()
     if (!responded) {
       responded = true
-      sendJson(res, code === 0 ? 200 : 500, {
+      sendJson(req, res, code === 0 ? 200 : 500, {
         ok: code === 0,
         loginId,
         detail: deviceLoginDetail(parseDeviceOutput(output), output),
@@ -186,15 +203,6 @@ function startDeviceLogin(res) {
 function writeSse(res, event, data) {
   res.write(`event: ${event}\n`)
   res.write(`data: ${JSON.stringify(data)}\n\n`)
-}
-
-function resolveWorkspacePath(inputPath) {
-  const resolved = path.resolve(rootDir, String(inputPath ?? ""))
-  const relative = path.relative(rootDir, resolved)
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("Path is outside the workspace")
-  }
-  return resolved
 }
 
 function openPath(target, mode) {
@@ -211,7 +219,7 @@ function openPath(target, mode) {
       spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", target], { detached: true, stdio: "ignore", windowsHide: true }).unref()
       return
     }
-    spawn("cmd.exe", ["/c", "start", "", target], { detached: true, stdio: "ignore", windowsHide: true }).unref()
+    spawn("explorer.exe", [target], { detached: true, stdio: "ignore", windowsHide: true }).unref()
     return
   }
 
@@ -220,28 +228,90 @@ function openPath(target, mode) {
   spawn(opener, [targetForReveal], { detached: true, stdio: "ignore" }).unref()
 }
 
+function isTextAttachment(mimeType, name) {
+  return mimeType.startsWith("text/")
+    || /\b(json|xml|yaml|javascript|typescript|markdown)\b/i.test(mimeType)
+    || /\.(txt|md|json|ya?ml|csv|tsv|tsx?|jsx?|css|html?|xml|py|java|go|rs|cs|cpp|c|h)$/i.test(name)
+}
+
+function prepareTurnInput(prompt, rawAttachments, runId) {
+  const attachments = decodeAttachments(rawAttachments)
+  if (attachments.length === 0) return { input: prompt, runUploadDir: null }
+
+  const runUploadDir = path.join(uploadRoot, runId)
+  fs.mkdirSync(runUploadDir, { recursive: true })
+  const input = [{ type: "text", text: prompt || "Inspect the attached files and help with them." }]
+
+  attachments.forEach((attachment, index) => {
+    const storedName = `${String(index + 1).padStart(2, "0")}-${attachment.name}`
+    const absolutePath = path.join(runUploadDir, storedName)
+    fs.writeFileSync(absolutePath, attachment.buffer)
+    if (attachment.kind === "image" && supportedImageMimeTypes.has(attachment.mimeType)) {
+      input.push({ type: "local_image", path: absolutePath })
+      return
+    }
+    if (isTextAttachment(attachment.mimeType, attachment.name) && attachment.buffer.length <= maxInlineTextAttachmentBytes) {
+      input.push({
+        type: "text",
+        text: `\n\n--- Attached file: ${attachment.name} ---\n${attachment.buffer.toString("utf8")}\n--- End attached file ---`,
+      })
+      return
+    }
+    input.push({
+      type: "text",
+      text: `\n\nAn attachment named ${attachment.name} is available at ${absolutePath}. Inspect it only if needed.`,
+    })
+  })
+
+  return { input, runUploadDir }
+}
+
 async function handleRun(req, res) {
-  const body = await readBody(req)
-  const prompt = String(body.prompt ?? "").trim()
-  if (!prompt) {
-    sendJson(res, 400, { ok: false, error: "Missing prompt" })
+  if (activeRuns >= maxConcurrentRuns) {
+    sendJson(req, res, 429, { ok: false, error: "The local agent is busy. Try again when an active run finishes." })
     return
   }
+  const body = await readJsonBody(req)
+  const prompt = String(body.prompt ?? "").trim()
+  if (!prompt && (!Array.isArray(body.attachments) || body.attachments.length === 0)) {
+    sendJson(req, res, 400, { ok: false, error: "Missing prompt or attachment" })
+    return
+  }
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    sendJson(req, res, 413, { ok: false, error: "Prompt exceeds the 100,000 character limit" })
+    return
+  }
+
+  activeRuns += 1
+  const runId = randomUUID()
+  let runUploadDir = null
 
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache, no-transform",
     connection: "keep-alive",
-    "access-control-allow-origin": "*",
+    ...securityHeaders(req),
   })
 
   const abortController = new AbortController()
-  const runId = randomUUID()
-  req.on("close", () => abortController.abort())
+  req.on("aborted", () => abortController.abort())
+  res.on("close", () => {
+    if (!res.writableEnded) abortController.abort()
+  })
 
   try {
-    const sandboxMode = sandboxModes.has(body.sandboxMode) ? body.sandboxMode : "workspace-write"
-    const approvalPolicy = approvalPolicies.has(body.approvalPolicy) ? body.approvalPolicy : "never"
+    const requestedSandboxMode = sandboxModes.has(body.sandboxMode) ? body.sandboxMode : "workspace-write"
+    if (requestedSandboxMode === "danger-full-access" && !allowDangerFullAccess) {
+      writeSse(res, "error", { message: "danger-full-access is disabled by the local bridge administrator." })
+      return
+    }
+    const sandboxMode = requestedSandboxMode
+    const requestedApprovalPolicy = approvalPolicies.has(body.approvalPolicy) ? body.approvalPolicy : "on-request"
+    if (requestedApprovalPolicy === "never" && !allowNeverApproval) {
+      writeSse(res, "error", { message: "The 'never ask' approval policy is disabled by the local bridge administrator." })
+      return
+    }
+    const approvalPolicy = requestedApprovalPolicy
     const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined
     const requestedReasoningEffort = reasoningEfforts.has(body.modelReasoningEffort)
       ? body.modelReasoningEffort
@@ -263,7 +333,9 @@ async function handleRun(req, res) {
       ? codexClient.resumeThread(String(body.threadId), threadOptions)
       : codexClient.startThread(threadOptions)
 
-    const { events } = await thread.runStreamed(prompt, { signal: abortController.signal })
+    const prepared = prepareTurnInput(prompt, body.attachments, runId)
+    runUploadDir = prepared.runUploadDir
+    const { events } = await thread.runStreamed(prepared.input, { signal: abortController.signal })
     for await (const event of events) {
       if (includeRawEvents) writeSse(res, "codex-event", event)
       if ("item" in event) {
@@ -283,6 +355,10 @@ async function handleRun(req, res) {
   } catch (error) {
     writeSse(res, "error", { message: cleanCodexErrorMessage(error) })
   } finally {
+    activeRuns = Math.max(0, activeRuns - 1)
+    if (runUploadDir) {
+      fs.rmSync(runUploadDir, { recursive: true, force: true })
+    }
     res.end()
   }
 }
@@ -290,19 +366,47 @@ async function handleRun(req, res) {
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "OPTIONS") {
-      sendJson(res, 204, {})
+      if (!isAllowedOrigin(req.headers.origin, allowedOrigins)) {
+        sendJson(req, res, 403, { ok: false, error: "Origin is not allowed" })
+        return
+      }
+      res.writeHead(204, securityHeaders(req))
+      res.end()
       return
     }
 
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`)
 
+    if (!isAllowedOrigin(req.headers.origin, allowedOrigins)) {
+      sendJson(req, res, 403, { ok: false, error: "Origin is not allowed" })
+      return
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/session") {
+      sendJson(req, res, 200, {
+        token: sessionToken,
+        capabilities: {
+          dangerFullAccess: allowDangerFullAccess,
+          neverApproval: allowNeverApproval,
+          attachments: true,
+          maxConcurrentRuns,
+        },
+      })
+      return
+    }
+
+    if (!hasValidSessionToken(req.headers["x-codex-session"], sessionToken)) {
+      sendJson(req, res, 401, { ok: false, error: "A valid local bridge session is required" })
+      return
+    }
+
     if (req.method === "GET" && url.pathname === "/api/codex/auth/status") {
-      sendJson(res, 200, await authStatus())
+      sendJson(req, res, 200, await authStatus())
       return
     }
 
     if (req.method === "POST" && url.pathname === "/api/codex/auth/device/start") {
-      startDeviceLogin(res)
+      startDeviceLogin(req, res)
       return
     }
 
@@ -312,7 +416,7 @@ const server = http.createServer(async (req, res) => {
         : url.pathname.split("/").at(-2)
       const login = loginId ? activeLogins.get(loginId) : null
       if (!login) {
-        sendJson(res, 404, { ok: false, error: "Unknown login session" })
+        sendJson(req, res, 404, { ok: false, error: "Unknown login session" })
         return
       }
       const status = await authStatus()
@@ -326,7 +430,7 @@ const server = http.createServer(async (req, res) => {
         }
         setTimeout(() => activeLogins.delete(loginId), 5000).unref?.()
       }
-      sendJson(res, 200, {
+      sendJson(req, res, 200, {
         ok: true,
         done: login.done || status.authenticated,
         exitCode: login.code,
@@ -338,7 +442,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/codex/auth/logout") {
       const result = await runCodex(["logout"])
-      sendJson(res, result.code === 0 ? 200 : 500, {
+      sendJson(req, res, result.code === 0 ? 200 : 500, {
         ok: result.code === 0,
         detail: stripAnsi(`${result.stdout}\n${result.stderr}`).trim(),
       })
@@ -351,19 +455,28 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/host/file-action") {
-      const body = await readBody(req)
-      const target = resolveWorkspacePath(body.path)
-      openPath(target, body.action ?? "open")
-      sendJson(res, 200, { ok: true, path: target })
+      const body = await readJsonBody(req)
+      const target = resolveWorkspacePath(rootDir, body.path)
+      if (!fileActions.has(body.action)) {
+        sendJson(req, res, 400, { ok: false, error: "Unsupported file action" })
+        return
+      }
+      openPath(target, body.action)
+      sendJson(req, res, 200, { ok: true, path: target })
       return
     }
 
-    sendJson(res, 404, { ok: false, error: "Not found" })
+    sendJson(req, res, 404, { ok: false, error: "Not found" })
   } catch (error) {
-    sendJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+    const status = Number(error?.statusCode) || 500
+    if (!res.headersSent) {
+      sendJson(req, res, status, { ok: false, error: error instanceof Error ? error.message : String(error) })
+    } else {
+      res.end()
+    }
   }
 })
 
-server.listen(port, () => {
-  console.log(`[codex-bridge] listening on http://localhost:${port}`)
+server.listen(port, host, () => {
+  console.log(`[codex-bridge] listening on http://${host}:${port}`)
 })

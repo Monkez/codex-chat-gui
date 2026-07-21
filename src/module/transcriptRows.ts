@@ -4,6 +4,13 @@ export type TranscriptRenderRow =
   | { kind: "item"; item: CodexTranscriptItem }
   | { kind: "tool_group"; id: string; tools: CodexToolMessage[] }
 
+export function getCurrentTurnMessages(messages: CodexTranscriptItem[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.type === "user") return messages.slice(index + 1)
+  }
+  return messages
+}
+
 export function buildTranscriptRows(messages: CodexTranscriptItem[], compactTools: boolean): TranscriptRenderRow[] {
   if (!compactTools) {
     return messages.map((item) => ({ kind: "item", item }))

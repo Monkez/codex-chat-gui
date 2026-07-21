@@ -32,6 +32,16 @@ test("buildTranscriptRows only groups adjacent tools", async () => {
   assert.equal(rows[3].item.id, "t3")
 })
 
+test("getCurrentTurnMessages scopes activity to the latest user turn", async () => {
+  const { getCurrentTurnMessages } = await loadModuleApi()
+  const messages = [
+    { id: "old", type: "tool", title: "old", status: "complete", createdAt: now },
+    { id: "user", type: "user", content: "next", createdAt: now },
+    { id: "new", type: "tool", title: "new", status: "running", createdAt: now },
+  ]
+  assert.deepEqual(getCurrentTurnMessages(messages).map((item) => item.id), ["new"])
+})
+
 test("parseSseFrame supports multiline data payloads", async () => {
   const { parseSseFrame } = await loadModuleApi()
   const parsed = parseSseFrame([
@@ -52,4 +62,25 @@ test("parseSseFrame converts malformed payloads into error frames", async () => 
 
   assert.equal(parsed.eventName, "error")
   assert.deepEqual(parsed.data, { message: "not json" })
+})
+
+test("isCodexTranscriptItem rejects malformed bridge payloads", async () => {
+  const { isCodexTranscriptItem } = await loadModuleApi()
+
+  assert.equal(isCodexTranscriptItem({
+    id: "message-1",
+    type: "assistant",
+    content: "hello",
+    createdAt: 123,
+  }), true)
+  assert.equal(isCodexTranscriptItem({
+    id: "message-2",
+    type: "assistant",
+    createdAt: 123,
+  }), false)
+  assert.equal(isCodexTranscriptItem({
+    id: "message-3",
+    type: "unknown",
+    createdAt: 123,
+  }), false)
 })

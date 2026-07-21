@@ -40,3 +40,10 @@ test("stripAnsi removes terminal color sequences from Codex CLI output", () => {
 
   assert.equal(message, "Welcome 0.13.0 https://auth.openai.com/codex/device")
 })
+
+test("sdkItemToUiMessage safely ignores malformed SDK items", () => {
+  assert.equal(sdkItemToUiMessage(null, "item.completed", "run-1", 123), null)
+  const command = sdkItemToUiMessage({ id: "command-1", type: "command_execution", status: "failed" }, "item.completed", "run-1", 123)
+  assert.equal(command.title, "Command")
+  assert.equal(command.status, "error")
+})
