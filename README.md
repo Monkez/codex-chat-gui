@@ -90,9 +90,9 @@ Map Codex SDK stream events into `CodexTranscriptItem` records:
 - `tool completed` -> update that tool item with `status: "complete"`, `output`, and `durationMs`.
 - `run status` -> append `type: "status"` for visible agent progress.
 - `reasoning` -> append `type: "reasoning"` to show compact thinking/action summaries.
-- `file_change` -> append `type: "file_changes"` for edited-file cards with Undo and Review.
+- `file_change` -> append `type: "file_changes"` with `status: "complete" | "error"`; action buttons appear only when the host supplies both the capability flag and callback.
 
-The demo also shows host callbacks for `onOpenFile`, `onRevealFile`, `onOpenFileWith`, `onOpenExternalLink`, `onCopyText`, `onUndoChanges`, and `onReviewChanges`.
+The demo implements `onOpenFile`, `onRevealFile`, `onOpenFileWith`, `onOpenExternalLink`, and `onCopyText`. Undo/Review remain optional host integration points and are intentionally hidden until a real patch backend is connected.
 
 ### Host Integration Points
 
@@ -106,13 +106,15 @@ The demo also shows host callbacks for `onOpenFile`, `onRevealFile`, `onOpenFile
 - File and link callbacks are host-owned. The web UI never opens Windows Explorer directly; Electron, Tauri, or a local bridge should implement those actions.
 - Transcript item ids should be scoped per agent turn/run so later SDK events do not overwrite messages from earlier user prompts.
 - File-change line counts should be marked with `statsKind: "exact"` only when the host has real diff stats. Use `statsKind: "unavailable"` to render changed files without misleading `+/-` counts.
+- The distributed stylesheet is scoped to `.codex-chat`; it does not reset the host page's `:root`, `body`, or `#root` styles.
+- The ESM package can be imported by SSR/build tooling without a browser `document`. Render the component itself only in a React environment that provides the DOM.
 
 ## Performance Notes
 
 - The UI groups only adjacent tool events, so text guidance can still appear between tool batches.
 - Assistant text uses a lightweight typewriter effect for short/medium responses and skips animation for long markdown or `prefers-reduced-motion`.
 - The demo bridge reuses one Codex SDK client and does not send raw SDK events to the browser unless `includeRawEvents` is explicitly set.
-- The demo SSE parser supports multi-line `data:` frames and processes a final frame even if the stream closes without a trailing delimiter.
+- The demo SSE parser supports multi-line `data:` frames, flushes the UTF-8 decoder, and treats a stream without a terminal `done`/`error` event as a failure.
 - `buildTranscriptRows` and `parseSseFrame` are exported as pure utilities and covered by Node tests.
 
 ## Auth

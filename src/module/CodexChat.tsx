@@ -363,8 +363,10 @@ function FileChangesCard({
   const visibleFiles = expanded ? item.files : item.files.slice(0, 3)
   const hiddenCount = Math.max(0, item.files.length - visibleFiles.length)
 
+  const isError = item.status === "error"
+
   return (
-    <section className="codex-file-changes">
+    <section className={`codex-file-changes${isError ? " is-error" : ""}`}>
       <header>
         <span className="codex-file-changes-icon">
           <GitCompare aria-hidden="true" />
@@ -381,12 +383,12 @@ function FileChangesCard({
           )}
         </div>
         <div className="codex-file-change-actions">
-          {item.canUndo ? (
+          {item.canUndo && handlers.onUndoChanges ? (
             <button type="button" onClick={() => handlers.onUndoChanges?.(item)}>
               Undo <RotateCcw aria-hidden="true" />
             </button>
           ) : null}
-          {item.canReview ? (
+          {item.canReview && handlers.onReviewChanges ? (
             <button type="button" onClick={() => handlers.onReviewChanges?.(item)}>
               Review
             </button>
@@ -801,10 +803,6 @@ export function CodexChat({
     })
   }, [isNearBottom, isRunning, messages])
 
-  useEffect(() => {
-    draftAttachmentsRef.current = attachments
-  }, [attachments])
-
   useEffect(() => () => {
     releaseAttachmentPreviews(draftAttachmentsRef.current)
   }, [])
@@ -825,58 +823,64 @@ export function CodexChat({
     }
   }, [preview])
 
+  function replaceAttachments(next: CodexChatAttachment[]) {
+    draftAttachmentsRef.current = next
+    setAttachments(next)
+  }
+
   function appendFiles(files: File[]) {
     if (files.length === 0) return
-    setAttachments((current) => {
-      const slots = maxAttachments - current.length
-      if (slots <= 0) {
-        setError(`Maximum ${maxAttachments} attachments per message.`)
-        return current
-      }
-      const sizeEligible = files.filter((file) => file.size <= maxAttachmentSizeBytes)
-      const currentBytes = current.reduce((sum, attachment) => sum + attachment.size, 0)
-      let nextBytes = currentBytes
-      const nextFiles = sizeEligible.slice(0, slots).filter((file) => {
-        if (nextBytes + file.size > maxTotalAttachmentBytes) return false
-        nextBytes += file.size
-        return true
-      })
-      if (sizeEligible.length < files.length) {
-        setError(`Each attachment must be ${formatBytes(maxAttachmentSizeBytes)} or smaller.`)
-      } else if (nextFiles.length < sizeEligible.slice(0, slots).length) {
-        setError(`Attachments may total up to ${formatBytes(maxTotalAttachmentBytes)} per message.`)
-      } else if (sizeEligible.length > slots) {
-        setError(`Only ${slots} more attachment${slots === 1 ? "" : "s"} can be added.`)
-      } else {
-        setError(null)
-      }
-      return [...current, ...nextFiles.map(makeAttachment)]
+    const current = draftAttachmentsRef.current
+    const slots = maxAttachments - current.length
+    if (slots <= 0) {
+      setError(`Maximum ${maxAttachments} attachments per message.`)
+      return
+    }
+    const sizeEligible = files.filter((file) => file.size <= maxAttachmentSizeBytes)
+    const currentBytes = current.reduce((sum, attachment) => sum + attachment.size, 0)
+    let nextBytes = currentBytes
+    const nextFiles = sizeEligible.slice(0, slots).filter((file) => {
+      if (nextBytes + file.size > maxTotalAttachmentBytes) return false
+      nextBytes += file.size
+      return true
     })
+    if (sizeEligible.length < files.length) {
+      setError(`Each attachment must be ${formatBytes(maxAttachmentSizeBytes)} or smaller.`)
+    } else if (nextFiles.length < sizeEligible.slice(0, slots).length) {
+      setError(`Attachments may total up to ${formatBytes(maxTotalAttachmentBytes)} per message.`)
+    } else if (sizeEligible.length > slots) {
+      setError(`Only ${slots} more attachment${slots === 1 ? "" : "s"} can be added.`)
+    } else {
+      setError(null)
+    }
+    replaceAttachments([...current, ...nextFiles.map(makeAttachment)])
   }
 
   function removeAttachment(target: CodexChatAttachment) {
     if (target.url) URL.revokeObjectURL(target.url)
-    setAttachments((current) => current.filter((attachment) => attachment.id !== target.id))
+    replaceAttachments(draftAttachmentsRef.current.filter((attachment) => attachment.id !== target.id))
     if (preview?.id === target.id) setPreview(null)
   }
 
   async function submit(payload?: Partial<CodexChatSubmitPayload>) {
     const content = payload?.content ?? value.trim()
-    const submitAttachments = payload?.attachments ?? attachments
+    const submitAttachments = payload?.attachments ?? draftAttachmentsRef.current
     if (!content && submitAttachments.length === 0) return
     const nextPayload = { content, attachments: submitAttachments }
     const previousValue = value
-    const previousAttachments = attachments
+    const previousAttachments = draftAttachmentsRef.current
     setSubmitting(true)
     setValue("")
-    setAttachments([])
+    replaceAttachments([])
     setError(null)
     textareaRef.current?.focus()
     try {
       await onSubmit(nextPayload)
     } catch (submitError) {
       setValue((current) => current || previousValue)
-      setAttachments((current) => current.length > 0 ? current : previousAttachments)
+      const current = draftAttachmentsRef.current
+      const currentIds = new Set(current.map((attachment) => attachment.id))
+      replaceAttachments([...previousAttachments.filter((attachment) => !currentIds.has(attachment.id)), ...current])
       setError(submitError instanceof Error ? submitError.message : "Unable to send this message.")
     } finally {
       setSubmitting(false)
@@ -894,6 +898,7 @@ export function CodexChat({
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setDragActive(false)
+    if (isRunning || isSubmitting) return
     appendFiles(Array.from(event.dataTransfer.files))
   }
 
@@ -919,7 +924,7 @@ export function CodexChat({
       className={`codex-chat theme-${theme} density-${density} ${showActivityPanel ? "has-activity" : ""} ${className ?? ""}`}
       onDragOver={(event) => {
         event.preventDefault()
-        setDragActive(true)
+        if (!isRunning && !isSubmitting) setDragActive(true)
       }}
       onDragLeave={() => setDragActive(false)}
       onDrop={handleDrop}

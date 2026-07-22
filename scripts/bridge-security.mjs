@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto"
+import fs from "node:fs"
 import path from "node:path"
 
 export const MAX_BODY_BYTES = 32 * 1024 * 1024
@@ -66,13 +67,32 @@ export function readJsonBody(req, maxBytes = MAX_BODY_BYTES) {
 }
 
 export function resolveWorkspacePath(rootDir, inputPath) {
-  const resolved = path.resolve(rootDir, String(inputPath ?? ""))
-  const relative = path.relative(rootDir, resolved)
-  if (!relative || relative === ".") return resolved
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  const realRoot = fs.realpathSync.native(rootDir)
+  const candidate = path.resolve(realRoot, String(inputPath ?? ""))
+  const lexicalRelative = path.relative(realRoot, candidate)
+  if (lexicalRelative.startsWith("..") || path.isAbsolute(lexicalRelative)) {
     throw Object.assign(new Error("Path is outside the workspace"), { statusCode: 403 })
   }
-  return resolved
+
+  let realTarget
+  try {
+    realTarget = fs.realpathSync.native(candidate)
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw Object.assign(new Error("Path does not exist"), { statusCode: 404 })
+    }
+    throw error
+  }
+  const realRelative = path.relative(realRoot, realTarget)
+  if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+    throw Object.assign(new Error("Path resolves outside the workspace"), { statusCode: 403 })
+  }
+  return realTarget
+}
+
+export function parseBoundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback
 }
 
 export function safeAttachmentName(value, index = 0) {

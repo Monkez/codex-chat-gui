@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { MessageSquare, SlidersHorizontal } from "lucide-react"
 import {
   CodexChat,
   type CodexAuthState,
   type CodexChatSubmitPayload,
-  type CodexFileChangeMessage,
+  type CodexRunStatus,
   type CodexPromptChoice,
   type CodexPromptRequest,
   type CodexChatDensity,
@@ -12,6 +12,7 @@ import {
   type CodexTranscriptItem,
   parseSseFrame,
   isCodexTranscriptItem,
+  releaseAttachmentPreviews,
 } from "../module"
 import { createUserMessage } from "./mockAgent"
 import {
@@ -79,24 +80,44 @@ function RunSettingsControl({
   onChange: (settings: RunSettings) => void
 }) {
   const [open, setOpen] = useState(false)
+  const controlRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    function closeSettings(event: globalThis.KeyboardEvent | PointerEvent) {
+      if (event instanceof globalThis.KeyboardEvent) {
+        if (event.key === "Escape") setOpen(false)
+        return
+      }
+      if (!controlRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener("keydown", closeSettings)
+    document.addEventListener("pointerdown", closeSettings)
+    return () => {
+      document.removeEventListener("keydown", closeSettings)
+      document.removeEventListener("pointerdown", closeSettings)
+    }
+  }, [open])
 
   function update<K extends keyof RunSettings>(key: K, value: RunSettings[K]) {
     onChange({ ...settings, [key]: value })
   }
 
   return (
-    <div className="codex-run-settings">
+    <div ref={controlRef} className="codex-run-settings">
       <button
         type="button"
         className="codex-run-settings-button"
         onClick={() => setOpen((current) => !current)}
         title="Agent run settings"
+        aria-expanded={open}
+        aria-controls="codex-run-settings-dialog"
       >
         <SlidersHorizontal aria-hidden="true" />
         <span>{settings.reasoningEffort}</span>
       </button>
       {open ? (
-        <div className="codex-run-settings-popover" role="dialog" aria-label="Agent run settings">
+        <div id="codex-run-settings-dialog" className="codex-run-settings-popover" role="dialog" aria-label="Agent run settings">
           <div className="codex-settings-intro">
             <strong>Run controls</strong>
             <small>Choose how much the agent can inspect and change.</small>
@@ -204,11 +225,11 @@ function DemoPromptButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-function createStatus(label: string, detail?: string): CodexTranscriptItem {
+function createStatus(label: string, detail?: string, status: CodexRunStatus = "idle"): CodexTranscriptItem {
   return {
     id: `demo-status-${crypto.randomUUID()}`,
     type: "status",
-    status: "running",
+    status,
     label,
     detail,
     createdAt: Date.now(),
@@ -221,9 +242,25 @@ function readPayloadField(data: unknown, field: string) {
     : undefined
 }
 
+function formatUsageSummary(data: unknown) {
+  const usage = readPayloadField(data, "usage")
+  if (typeof usage !== "object" || usage === null) return undefined
+  const record = usage as Record<string, unknown>
+  const input = record.input_tokens
+  const cached = record.cached_input_tokens
+  const output = record.output_tokens
+  const parts = [
+    typeof input === "number" ? `${input.toLocaleString()} input` : null,
+    typeof cached === "number" && cached > 0 ? `${cached.toLocaleString()} cached` : null,
+    typeof output === "number" ? `${output.toLocaleString()} output` : null,
+  ].filter(Boolean)
+  return parts.length > 0 ? `${parts.join(" · ")} tokens` : undefined
+}
+
 export function DemoApp() {
   const [messages, setMessages] = useState<CodexTranscriptItem[]>(initialMessages)
   const [isRunning, setRunning] = useState(false)
+  const [runStatus, setRunStatus] = useState<CodexRunStatus>("idle")
   const [runLabel, setRunLabel] = useState("Ready")
   const [threadId, setThreadId] = useState<string | null>(null)
   const [runSettings, setRunSettings] = useState<RunSettings>(defaultRunSettings)
@@ -235,16 +272,19 @@ export function DemoApp() {
   })
   const abortRef = useRef<AbortController | null>(null)
   const loginPollRef = useRef<number | null>(null)
+  const loginStartingRef = useRef(false)
   const lastCodexErrorRef = useRef<string | null>(null)
+  const messagesRef = useRef(messages)
 
-  function appendStatus(label: string, detail?: string) {
-    setMessages((current) => [...current, createStatus(label, detail)])
+  function appendStatus(label: string, detail?: string, status: CodexRunStatus = "idle") {
+    setMessages((current) => [...current, createStatus(label, detail, status)])
   }
 
   function appendCodexError(detail: string) {
     if (lastCodexErrorRef.current === detail) return
     lastCodexErrorRef.current = detail
-    appendStatus("Codex error", detail)
+    setRunStatus("error")
+    appendStatus("Codex error", detail, "error")
   }
 
   function upsertMessage(message: CodexTranscriptItem) {
@@ -260,12 +300,14 @@ export function DemoApp() {
     })
   }
 
-  async function refreshAuthStatus() {
+  const refreshAuthStatus = useCallback(async () => {
     try {
       const session = await getBridgeSession()
       setCapabilities(session.capabilities)
       const response = await bridgeFetch("/api/codex/auth/status")
+      if (!response.ok) throw new Error(`Unable to check Codex authentication (${response.status})`)
       const payload = await response.json() as { authenticated: boolean; status: CodexAuthState["status"]; detail?: string }
+      if (typeof payload.authenticated !== "boolean") throw new Error("The local bridge returned an invalid authentication status")
       setAuthState({
         status: payload.authenticated ? "authenticated" : "signed_out",
         accountLabel: payload.authenticated ? "Codex account" : undefined,
@@ -277,18 +319,31 @@ export function DemoApp() {
         detail: error instanceof Error ? error.message : String(error),
       })
     }
-  }
+  }, [])
 
   useEffect(() => {
     void refreshAuthStatus()
     return () => {
-      if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
+      if (loginPollRef.current !== null) window.clearTimeout(loginPollRef.current)
+      abortRef.current?.abort()
+    }
+  }, [refreshAuthStatus])
+
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
+  useEffect(() => () => {
+    for (const message of messagesRef.current) {
+      if (message.type === "user" && message.attachments) releaseAttachmentPreviews(message.attachments)
     }
   }, [])
 
   async function handleStartAccountLogin() {
+    if (loginStartingRef.current) return
+    loginStartingRef.current = true
     if (loginPollRef.current !== null) {
-      window.clearInterval(loginPollRef.current)
+      window.clearTimeout(loginPollRef.current)
       loginPollRef.current = null
     }
     setAuthState({
@@ -305,6 +360,7 @@ export function DemoApp() {
         detail?: string
         error?: string
       }
+      if (!response.ok) throw new Error(payload.error ?? `Unable to start Codex login (${response.status})`)
       if (!payload.ok || !payload.loginId) {
         throw new Error(payload.error ?? payload.detail ?? "Unable to start Codex login")
       }
@@ -315,16 +371,18 @@ export function DemoApp() {
         detail: payload.detail || "Open the verification page and approve Codex access.",
       })
 
-      loginPollRef.current = window.setInterval(async () => {
+      const loginDeadline = Date.now() + 10 * 60 * 1000
+      const pollLogin = async () => {
         try {
+          if (Date.now() >= loginDeadline) throw new Error("Codex login timed out. Please start it again.")
           const statusResponse = await bridgeFetch(`/api/codex/auth/device/${payload.loginId}/status`)
+          if (!statusResponse.ok) throw new Error(`Unable to check Codex login (${statusResponse.status})`)
           const statusPayload = await statusResponse.json() as {
             done: boolean
             detail?: string
             auth?: { authenticated: boolean; detail?: string }
           }
           if (statusPayload.auth?.authenticated) {
-            if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
             loginPollRef.current = null
             setAuthState({
               status: "authenticated",
@@ -335,41 +393,52 @@ export function DemoApp() {
             return
           }
           if (statusPayload.done) {
-            if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
             loginPollRef.current = null
             setAuthState({
               status: "error",
               detail: statusPayload.detail || "Codex login did not complete.",
             })
+            return
           }
+          loginPollRef.current = window.setTimeout(() => void pollLogin(), 2000)
         } catch (error) {
-          if (loginPollRef.current !== null) window.clearInterval(loginPollRef.current)
           loginPollRef.current = null
           setAuthState({
             status: "error",
             detail: error instanceof Error ? error.message : String(error),
           })
         }
-      }, 2000)
+      }
+      loginPollRef.current = window.setTimeout(() => void pollLogin(), 1000)
     } catch (error) {
       setAuthState({
         status: "error",
         detail: error instanceof Error ? error.message : String(error),
       })
+    } finally {
+      loginStartingRef.current = false
     }
   }
 
   async function handleSignOut() {
     if (loginPollRef.current !== null) {
-      window.clearInterval(loginPollRef.current)
+      window.clearTimeout(loginPollRef.current)
       loginPollRef.current = null
     }
-    await bridgeFetch("/api/codex/auth/logout", { method: "POST" }).catch(() => undefined)
-    setAuthState({
-      status: "signed_out",
-      detail: "Disconnected. Connect your Codex account again before running a real SDK session.",
-    })
-    appendStatus("Signed out", "Demo credential state cleared.")
+    setAuthState((current) => ({ ...current, status: "checking", detail: "Signing out..." }))
+    try {
+      const response = await bridgeFetch("/api/codex/auth/logout", { method: "POST" })
+      if (!response.ok) throw new Error(`Unable to sign out (${response.status})`)
+      setAuthState({
+        status: "signed_out",
+        detail: "Disconnected. Connect your Codex account again before running a real SDK session.",
+      })
+      appendStatus("Signed out", "Local Codex credentials were cleared.")
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      setAuthState({ status: "error", detail })
+      appendStatus("Sign out failed", detail, "error")
+    }
   }
 
   async function runRealCodex(prompt: string, attachments: CodexChatSubmitPayload["attachments"]) {
@@ -377,7 +446,10 @@ export function DemoApp() {
     abortRef.current = controller
     lastCodexErrorRef.current = null
     setRunning(true)
+    setRunStatus("starting")
     setRunLabel("Starting Codex")
+    let terminalEventSeen = false
+    let streamFailed = false
     try {
       const serializedAttachments = await serializeAttachments(attachments)
       const response = await bridgeFetch("/api/codex/run", {
@@ -402,7 +474,32 @@ export function DemoApp() {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      setRunStatus("running")
       setRunLabel(`Streaming Codex - ${runSettings.reasoningEffort}`)
+
+      function processFrame(frame: string) {
+        const event = parseSseFrame(frame)
+        if (!event) return
+        if (event.eventName === "ui-message") {
+          if (isCodexTranscriptItem(event.data)) upsertMessage(event.data)
+          else {
+            streamFailed = true
+            appendCodexError("The local bridge returned an invalid transcript item.")
+          }
+        } else if (event.eventName === "thread") {
+          const nextThreadId = readPayloadField(event.data, "threadId")
+          if (typeof nextThreadId === "string") setThreadId(nextThreadId)
+        } else if (event.eventName === "error") {
+          terminalEventSeen = true
+          streamFailed = true
+          const message = readPayloadField(event.data, "message")
+          appendCodexError(typeof message === "string" ? message : String(event.data))
+        } else if (event.eventName === "done") {
+          terminalEventSeen = true
+          const usage = formatUsageSummary(event.data)
+          if (usage) appendStatus("Run complete", usage)
+        }
+      }
 
       while (true) {
         const { done, value } = await reader.read()
@@ -410,67 +507,42 @@ export function DemoApp() {
         buffer += decoder.decode(value, { stream: true })
         const parts = buffer.split(/\r?\n\r?\n/)
         buffer = parts.pop() ?? ""
-        for (const part of parts) {
-          const event = parseSseFrame(part)
-          if (!event) continue
-          if (event.eventName === "ui-message") {
-            if (isCodexTranscriptItem(event.data)) upsertMessage(event.data)
-            else appendCodexError("The local bridge returned an invalid transcript item.")
-          } else if (event.eventName === "thread") {
-            const nextThreadId = readPayloadField(event.data, "threadId")
-            if (typeof nextThreadId === "string") setThreadId(nextThreadId)
-          } else if (event.eventName === "error") {
-            const message = readPayloadField(event.data, "message")
-            appendCodexError(typeof message === "string" ? message : String(event.data))
-          } else if (event.eventName === "done") {
-            setRunLabel("Ready")
-          }
-        }
+        for (const part of parts) processFrame(part)
       }
-      if (buffer.trim()) {
-        const event = parseSseFrame(buffer)
-        if (event?.eventName === "ui-message") {
-          if (isCodexTranscriptItem(event.data)) upsertMessage(event.data)
-          else appendCodexError("The local bridge returned an invalid transcript item.")
-        } else if (event?.eventName === "thread") {
-          const nextThreadId = readPayloadField(event.data, "threadId")
-          if (typeof nextThreadId === "string") setThreadId(nextThreadId)
-        } else if (event?.eventName === "error") {
-          const message = readPayloadField(event.data, "message")
-          appendCodexError(typeof message === "string" ? message : String(event.data))
-        }
+      buffer += decoder.decode()
+      if (buffer.trim()) processFrame(buffer)
+      if (!terminalEventSeen) throw new Error("The Codex stream closed before returning a final result.")
+      if (!streamFailed) {
+        setRunStatus("idle")
+        setRunLabel("Ready")
       }
     } catch (error) {
       if (controller.signal.aborted) {
         appendStatus("Run stopped", "User cancelled the active Codex stream.")
+        setRunStatus("idle")
+        setRunLabel("Ready")
       } else {
         appendCodexError(error instanceof Error ? error.message : String(error))
+        setRunLabel("Run failed")
       }
     } finally {
       setRunning(false)
-      setRunLabel("Ready")
+      if (abortRef.current === controller) abortRef.current = null
     }
   }
 
   async function handleSubmit(payload: CodexChatSubmitPayload) {
-    setMessages((current) => [...current, createUserMessage(payload.content, payload.attachments)])
     if (authState.status !== "authenticated") {
-      appendStatus("Connect Codex first", "Use Connect Codex in the header to authenticate with your real Codex account.")
-      return
+      const message = "Connect Codex in the header before sending a message."
+      appendStatus("Connect Codex first", message, "error")
+      throw new Error(message)
     }
+    setMessages((current) => [...current, createUserMessage(payload.content, payload.attachments)])
     await runRealCodex(payload.content, payload.attachments)
   }
 
   function handleCancel() {
     abortRef.current?.abort()
-  }
-
-  function handleUndoChanges(message: CodexFileChangeMessage) {
-    appendStatus("Undo requested", `Host should revert patch group ${message.id}.`)
-  }
-
-  function handleReviewChanges(message: CodexFileChangeMessage) {
-    appendStatus("Review requested", `${message.files.length} changed files would open in the app review panel.`)
   }
 
   async function requestFileAction(action: "open" | "reveal" | "open-with", path: string) {
@@ -490,7 +562,7 @@ export function DemoApp() {
       await requestFileAction("open", path)
       appendStatus("Opened file", line ? `${path}:${line}` : path)
     } catch (error) {
-      appendStatus("Open file failed", error instanceof Error ? error.message : String(error))
+      appendStatus("Open file failed", error instanceof Error ? error.message : String(error), "error")
     }
   }
 
@@ -499,7 +571,7 @@ export function DemoApp() {
       await requestFileAction("reveal", path)
       appendStatus("Revealed in Explorer", path)
     } catch (error) {
-      appendStatus("Reveal failed", error instanceof Error ? error.message : String(error))
+      appendStatus("Reveal failed", error instanceof Error ? error.message : String(error), "error")
     }
   }
 
@@ -508,17 +580,18 @@ export function DemoApp() {
       await requestFileAction("open-with", path)
       appendStatus("Opened app picker", path)
     } catch (error) {
-      appendStatus("Open with failed", error instanceof Error ? error.message : String(error))
+      appendStatus("Open with failed", error instanceof Error ? error.message : String(error), "error")
     }
   }
 
   function handleOpenExternalLink(href: string) {
-    appendStatus("Open link", href)
-    window.open(href, "_blank", "noopener,noreferrer")
+    const opened = window.open(href, "_blank", "noopener,noreferrer")
+    appendStatus(opened ? "Opened link" : "Popup blocked", href, opened ? "idle" : "error")
   }
 
   async function handleCopyText(text: string) {
-    await navigator.clipboard?.writeText(text)
+    if (!navigator.clipboard) throw new Error("Clipboard access is unavailable in this browser")
+    await navigator.clipboard.writeText(text)
     appendStatus("Copied", text)
   }
 
@@ -559,7 +632,7 @@ export function DemoApp() {
       projectLabel="Demo workspace"
       messages={messages}
       isRunning={isRunning}
-      runStatus={isRunning ? "running" : "idle"}
+      runStatus={runStatus}
       runLabel={runLabel}
       authState={authState}
       theme={runSettings.theme}
@@ -581,8 +654,6 @@ export function DemoApp() {
       onSignOut={handleSignOut}
       onSubmit={handleSubmit}
       onCancel={handleCancel}
-      onUndoChanges={handleUndoChanges}
-      onReviewChanges={handleReviewChanges}
       onOpenFile={handleOpenFile}
       onRevealFile={handleRevealFile}
       onOpenFileWith={handleOpenFileWith}

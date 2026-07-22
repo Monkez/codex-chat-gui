@@ -19,7 +19,7 @@ test("file changes without exact diff stats are marked unavailable", () => {
     id: "change-1",
     type: "file_change",
     changes: [
-      { path: "README.md", kind: "modify" },
+      { path: "README.md", kind: "update" },
     ],
   }, "item.completed", "run-1", 123)
 
@@ -27,6 +27,37 @@ test("file changes without exact diff stats are marked unavailable", () => {
   assert.equal(message.files[0].statsKind, "unavailable")
   assert.equal(message.files[0].additions, 0)
   assert.equal(message.files[0].deletions, 0)
+  assert.equal(message.canUndo, false)
+  assert.equal(message.status, "complete")
+})
+
+test("failed file changes surface an error without fake actions", () => {
+  const message = sdkItemToUiMessage({
+    id: "change-failed",
+    type: "file_change",
+    status: "failed",
+    changes: [{ path: "README.md", kind: "update" }],
+  }, "item.completed", "run-1", 123)
+
+  assert.equal(message.status, "error")
+  assert.equal(message.canUndo, false)
+  assert.equal(message.canReview, false)
+})
+
+test("todo lists render as an expandable plan", () => {
+  const message = sdkItemToUiMessage({
+    id: "todo-1",
+    type: "todo_list",
+    items: [
+      { text: "Inspect", completed: true },
+      { text: "Fix", completed: false },
+    ],
+  }, "item.updated", "run-1", 123)
+
+  assert.equal(message.type, "reasoning")
+  assert.equal(message.status, "thinking")
+  assert.equal(message.defaultExpanded, true)
+  assert.deepEqual(message.steps, ["[x] Inspect", "[ ] Fix"])
 })
 
 test("cleanCodexErrorMessage removes warning noise", () => {

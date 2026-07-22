@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react"
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    conditions: ["module", "import", "default"],
+  },
   build: {
     outDir: "dist/lib",
     emptyOutDir: true,

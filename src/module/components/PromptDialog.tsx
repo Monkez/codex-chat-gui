@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type { CodexPromptChoice, CodexPromptRequest } from "../types"
 
 interface PromptDialogProps {
@@ -8,9 +8,19 @@ interface PromptDialogProps {
 
 export function PromptDialog({ request, onResolve }: PromptDialogProps) {
   const dialogRef = useRef<HTMLElement>(null)
-  const resolveChoice = useCallback((choice: CodexPromptChoice | undefined) => {
-    if (!choice) return
-    void onResolve?.(request, choice)
+  const resolvingRef = useRef(false)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
+  const [isResolving, setResolving] = useState(false)
+  const resolveChoice = useCallback(async (choice: CodexPromptChoice | undefined) => {
+    if (!choice || resolvingRef.current) return
+    resolvingRef.current = true
+    setResolving(true)
+    try {
+      await onResolve?.(request, choice)
+    } catch {
+      resolvingRef.current = false
+      setResolving(false)
+    }
   }, [onResolve, request])
   const cancelChoice = request.choices.find((choice) => choice.id === request.cancelChoiceId)
   const defaultChoice = request.choices.find((choice) => choice.id === request.defaultChoiceId)
@@ -21,6 +31,7 @@ export function PromptDialog({ request, onResolve }: PromptDialogProps) {
   useEffect(() => {
     const dialog = dialogRef.current
     if (!dialog) return undefined
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const focusable = Array.from(dialog.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"))
       .filter((element) => !element.hasAttribute("disabled"))
     const initial = defaultChoice
@@ -47,7 +58,10 @@ export function PromptDialog({ request, onResolve }: PromptDialogProps) {
     }
 
     document.addEventListener("keydown", handleKeyDown)
-    return () => document.removeEventListener("keydown", handleKeyDown)
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown)
+      previousFocusRef.current?.focus()
+    }
   }, [cancelChoice, defaultChoice, resolveChoice])
 
   return (
@@ -55,7 +69,7 @@ export function PromptDialog({ request, onResolve }: PromptDialogProps) {
       className="codex-dialog-backdrop"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) resolveChoice(cancelChoice)
+        if (event.target === event.currentTarget) void resolveChoice(cancelChoice)
       }}
     >
       <section
@@ -78,7 +92,8 @@ export function PromptDialog({ request, onResolve }: PromptDialogProps) {
               type="button"
               data-choice-id={choice.id}
               className={`tone-${choice.tone ?? "secondary"}`}
-              onClick={() => resolveChoice(choice)}
+              disabled={isResolving}
+              onClick={() => void resolveChoice(choice)}
             >
               {choice.label}
             </button>

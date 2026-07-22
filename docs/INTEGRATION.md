@@ -33,3 +33,15 @@ Dữ liệu nhận từ network phải qua `isCodexTranscriptItem()` trước kh
 - `showActivityPanel`: hiển thị run trace và metrics.
 - `transcriptWindowSize`: giới hạn row render gần nhất.
 - `maxAttachments`, `maxAttachmentSizeBytes`, `maxTotalAttachmentBytes`: chính sách attachment phía UI.
+
+## Trạng thái và action của file change
+
+`CodexFileChangeMessage.status` có thể là `complete` hoặc `error`. Nút Undo/Review chỉ hiển thị khi message bật `canUndo`/`canReview` và host đã cung cấp callback tương ứng. Không bật capability nếu backend chưa thực hiện hành động thật.
+
+## SSR và CSS
+
+ESM entry có thể import trong Node/SSR mà không cần `document`. CSS package được scope trong `.codex-chat`, không reset `:root`, `body` hay `#root` của host. Component vẫn cần DOM khi render và tương tác.
+
+## Kết thúc stream
+
+Transport của host phải phát chính xác một sự kiện kết thúc `done` hoặc `error`. Nếu stream đóng mà không có terminal event, UI coi run là thất bại để không hiển thị trạng thái thành công sai.

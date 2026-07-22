@@ -90,6 +90,7 @@ export interface CodexReasoningMessage extends CodexTranscriptBase {
 export interface CodexFileChangeMessage extends CodexTranscriptBase {
   type: "file_changes"
   title?: string
+  status?: "complete" | "error"
   files: CodexFileChange[]
   canUndo?: boolean
   canReview?: boolean

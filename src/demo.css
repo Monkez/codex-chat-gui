@@ -1,0 +1,15 @@
+:root {
+  background: #f2f4f3;
+  color: #17202a;
+  color-scheme: light;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+#root {
+  min-height: 100vh;
+}

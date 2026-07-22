@@ -15,14 +15,20 @@
 - Settings hiển thị phiên bản runtime; lỗi model cache cũ được gom thành một hướng dẫn xử lý rõ ràng.
 - Header đã có stacking layer riêng để Settings/Auth popover luôn nằm trên transcript.
 - Typography dùng Segoe UI Variable Text khi có, tăng tương phản và giữ font smoothing mặc định để chữ sắc nét hơn.
+- Adapter xử lý top-level SDK error, todo list, file-change thất bại và terminal SSE đúng trạng thái.
+- Validation transcript kiểm tra sâu nested data; package ESM import được trong Node/SSR.
+- CSS package không còn reset host document; popover responsive, có Escape/click-outside và nằm trên transcript.
+- Device-login polling tuần tự có timeout; run/auth/attachment cleanup theo đúng vòng đời.
+- File action chặn cả symlink/junction escape; cấu hình port/concurrency được giới hạn.
 
 ## Kiểm chứng cuối
 
-- 21/21 tests pass.
+- 25/25 tests pass.
 - Demo build và library build pass.
 - Package dry-run pass, có CSS và type declarations.
 - Dependency audit: 0 vulnerability.
 - Bridge smoke test: origin lạ 403, thiếu token 401, session hợp lệ 200.
+- Browser check: desktop 1280×720 và mobile 390×844 đều không overflow; Settings/Auth nằm trên transcript, nền đặc, Escape hoạt động và không có console error.
 
 ## Hosting
 

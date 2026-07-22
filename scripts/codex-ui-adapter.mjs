@@ -54,7 +54,7 @@ export function sdkItemToUiMessage(item, eventType, runId, now = Date.now()) {
         id,
         type: "reasoning",
         title: "Thinking",
-        status: "complete",
+        status: eventType === "item.completed" ? "complete" : "thinking",
         steps: item.text ? [item.text] : [],
         defaultExpanded: false,
         createdAt: now,
@@ -75,12 +75,14 @@ export function sdkItemToUiMessage(item, eventType, runId, now = Date.now()) {
     case "file_change":
       {
       const changes = Array.isArray(item.changes) ? item.changes : []
+      const patchFailed = item.status === "failed"
       return {
         id,
         type: "file_changes",
-        title: `Changed ${changes.length} files`,
-        canUndo: true,
-        canReview: true,
+        title: patchFailed ? `Failed to change ${changes.length} files` : `Changed ${changes.length} files`,
+        status: patchFailed ? "error" : "complete",
+        canUndo: false,
+        canReview: !patchFailed,
         files: changes.filter((change) => change && typeof change.path === "string").map((change) => ({
           path: change.path,
           additions: 0,
@@ -96,9 +98,24 @@ export function sdkItemToUiMessage(item, eventType, runId, now = Date.now()) {
         id,
         type: "tool",
         title: "Web search",
-        status: "complete",
+        status: eventType === "item.completed" ? "complete" : "running",
         input: item.query,
         createdAt: now,
+      }
+    case "todo_list":
+      {
+      const items = Array.isArray(item.items) ? item.items : []
+      return {
+        id,
+        type: "reasoning",
+        title: "Plan",
+        status: eventType === "item.completed" ? "complete" : "thinking",
+        steps: items
+          .filter((entry) => entry && typeof entry.text === "string")
+          .map((entry) => `${entry.completed ? "[x]" : "[ ]"} ${entry.text}`),
+        defaultExpanded: eventType !== "item.completed",
+        createdAt: now,
+      }
       }
     case "mcp_tool_call":
       return {

@@ -5,9 +5,6 @@ const now = 1
 let moduleApi
 
 async function loadModuleApi() {
-  globalThis.document ??= {
-    createElement: () => ({}),
-  }
   moduleApi ??= await import("../dist/lib/codex-chat-gui.js")
   return moduleApi
 }
@@ -81,6 +78,34 @@ test("isCodexTranscriptItem rejects malformed bridge payloads", async () => {
   assert.equal(isCodexTranscriptItem({
     id: "message-3",
     type: "unknown",
+    createdAt: 123,
+  }), false)
+  assert.equal(isCodexTranscriptItem({
+    id: "reasoning-invalid",
+    type: "reasoning",
+    title: "Thinking",
+    status: "thinking",
+    steps: ["valid", { nested: "invalid" }],
+    createdAt: 123,
+  }), false)
+  assert.equal(isCodexTranscriptItem({
+    id: "files-invalid",
+    type: "file_changes",
+    files: [null],
+    createdAt: 123,
+  }), false)
+  assert.equal(isCodexTranscriptItem({
+    id: "tool-invalid",
+    type: "tool",
+    title: "Command",
+    status: "finished",
+    createdAt: 123,
+  }), false)
+  assert.equal(isCodexTranscriptItem({
+    id: "status-invalid",
+    type: "status",
+    status: "busy",
+    label: "Busy",
     createdAt: 123,
   }), false)
 })

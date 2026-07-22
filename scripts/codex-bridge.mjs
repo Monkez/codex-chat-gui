@@ -12,19 +12,21 @@ import {
   getAllowedOrigins,
   hasValidSessionToken,
   isAllowedOrigin,
+  parseBoundedInteger,
   readJsonBody,
   resolveWorkspacePath,
 } from "./bridge-security.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, "..")
-const port = Number(process.env.CODEX_BRIDGE_PORT ?? 8787)
-const host = process.env.CODEX_BRIDGE_HOST ?? "127.0.0.1"
+const port = parseBoundedInteger(process.env.CODEX_BRIDGE_PORT ?? 8787, 8787, 1, 65535)
+const requestedHost = process.env.CODEX_BRIDGE_HOST ?? "127.0.0.1"
+const host = new Set(["127.0.0.1", "::1", "localhost"]).has(requestedHost) ? requestedHost : "127.0.0.1"
 const sessionToken = randomBytes(32).toString("base64url")
 const allowedOrigins = getAllowedOrigins(process.env.CODEX_ALLOWED_ORIGINS)
 const allowDangerFullAccess = process.env.CODEX_ALLOW_DANGER_FULL_ACCESS === "1"
 const allowNeverApproval = process.env.CODEX_ALLOW_NEVER_APPROVAL === "1"
-const maxConcurrentRuns = Math.max(1, Number(process.env.CODEX_MAX_CONCURRENT_RUNS ?? 2))
+const maxConcurrentRuns = parseBoundedInteger(process.env.CODEX_MAX_CONCURRENT_RUNS ?? 2, 2, 1, 8)
 const uploadRoot = path.join(rootDir, ".codex-chat-ui", "uploads")
 const codexVersion = (() => {
   try {
@@ -41,6 +43,7 @@ const reasoningEfforts = new Set(["minimal", "low", "medium", "high", "xhigh"])
 const fileActions = new Set(["open", "reveal", "open-with"])
 const supportedImageMimeTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 const maxInlineTextAttachmentBytes = 256 * 1024
+const maxLoginOutputChars = 64 * 1024
 const codexClient = new Codex()
 
 function codexBin() {
@@ -135,6 +138,7 @@ function startDeviceLogin(req, res) {
   })
   let output = ""
   let responded = false
+  let cleanupScheduled = false
   const login = {
     child,
     done: false,
@@ -145,6 +149,8 @@ function startDeviceLogin(req, res) {
   activeLogins.set(loginId, login)
 
   function scheduleCleanup() {
+    if (cleanupScheduled) return
+    cleanupScheduled = true
     setTimeout(() => {
       activeLogins.delete(loginId)
       if (!login.done) {
@@ -171,12 +177,12 @@ function startDeviceLogin(req, res) {
   }
 
   child.stdout?.on("data", (chunk) => {
-    output += chunk.toString("utf8")
+    output = `${output}${chunk.toString("utf8")}`.slice(-maxLoginOutputChars)
     login.output = output
     maybeRespond()
   })
   child.stderr?.on("data", (chunk) => {
-    output += chunk.toString("utf8")
+    output = `${output}${chunk.toString("utf8")}`.slice(-maxLoginOutputChars)
     login.output = output
     maybeRespond()
   })
@@ -202,6 +208,15 @@ function startDeviceLogin(req, res) {
         loginId,
         detail: deviceLoginDetail(parseDeviceOutput(output), output),
       })
+    }
+  })
+  res.on("close", () => {
+    if (responded || login.done) return
+    activeLogins.delete(loginId)
+    try {
+      login.child.kill()
+    } catch {
+      // ignore
     }
   })
   setTimeout(maybeRespond, 15000)
@@ -292,6 +307,8 @@ async function handleRun(req, res) {
   activeRuns += 1
   const runId = randomUUID()
   let runUploadDir = null
+  let terminalEventSeen = false
+  const reportedErrors = new Set()
 
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -343,6 +360,13 @@ async function handleRun(req, res) {
     const prepared = prepareTurnInput(prompt, body.attachments, runId)
     runUploadDir = prepared.runUploadDir
     const { events } = await thread.runStreamed(prepared.input, { signal: abortController.signal })
+    const writeErrorOnce = (value) => {
+      const message = cleanCodexErrorMessage(value)
+      terminalEventSeen = true
+      if (reportedErrors.has(message)) return
+      reportedErrors.add(message)
+      writeSse(res, "error", { message })
+    }
     for await (const event of events) {
       if (includeRawEvents) writeSse(res, "codex-event", event)
       if ("item" in event) {
@@ -353,14 +377,25 @@ async function handleRun(req, res) {
         writeSse(res, "thread", { threadId: event.thread_id })
       }
       if (event.type === "turn.completed") {
+        terminalEventSeen = true
         writeSse(res, "done", { usage: event.usage })
       }
       if (event.type === "turn.failed") {
-        writeSse(res, "error", { message: cleanCodexErrorMessage(event.error) })
+        writeErrorOnce(event.error)
+      }
+      if (event.type === "error") {
+        writeErrorOnce(event.message)
       }
     }
+    if (!terminalEventSeen && !abortController.signal.aborted) {
+      writeErrorOnce("Codex stream ended before reporting a final result.")
+    }
   } catch (error) {
-    writeSse(res, "error", { message: cleanCodexErrorMessage(error) })
+    const message = cleanCodexErrorMessage(error)
+    if (!reportedErrors.has(message) && !abortController.signal.aborted) {
+      reportedErrors.add(message)
+      writeSse(res, "error", { message })
+    }
   } finally {
     activeRuns = Math.max(0, activeRuns - 1)
     if (runUploadDir) {
@@ -414,6 +449,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/codex/auth/device/start") {
+      const activeLogin = [...activeLogins.values()].some((login) => !login.done)
+      if (activeLogin) {
+        sendJson(req, res, 409, { ok: false, error: "A Codex device login is already in progress" })
+        return
+      }
       startDeviceLogin(req, res)
       return
     }

@@ -16,6 +16,9 @@ Local bridge có khả năng khởi chạy coding agent và mở file, vì vậy
 - Giới hạn số lượng, kích thước từng attachment và tổng dung lượng.
 - Chuẩn hóa tên file trước khi ghi attachment tạm.
 - File action chỉ được phép thao tác bên trong workspace.
+- Workspace và đường dẫn đích được resolve theo real path; symlink/junction trỏ ra ngoài workspace bị từ chối.
+- Port và số run đồng thời chỉ nhận số nguyên trong khoảng an toàn; giá trị sai quay về mặc định.
+- Output của device-login được giới hạn trong bộ nhớ, và mỗi thời điểm chỉ có một login đang chạy.
 
 ## Cấu hình nâng quyền
 

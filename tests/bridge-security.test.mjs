@@ -1,12 +1,15 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
+import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import {
   decodeAttachments,
   getAllowedOrigins,
   hasValidSessionToken,
   isAllowedOrigin,
+  parseBoundedInteger,
   readJsonBody,
   resolveWorkspacePath,
   safeAttachmentName,
@@ -26,10 +29,28 @@ test("bridge session tokens use exact timing-safe matches", () => {
   assert.equal(hasValidSessionToken(undefined, "secret-token"), false)
 })
 
-test("workspace paths cannot escape the project", () => {
-  const root = path.resolve("workspace")
-  assert.equal(resolveWorkspacePath(root, "src/index.ts"), path.join(root, "src", "index.ts"))
-  assert.throws(() => resolveWorkspacePath(root, "../secret.txt"), /outside the workspace/)
+test("workspace paths cannot escape the project through traversal or links", (context) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-ui-security-"))
+  const workspace = path.join(tempRoot, "workspace")
+  const outside = path.join(tempRoot, "outside")
+  fs.mkdirSync(path.join(workspace, "src"), { recursive: true })
+  fs.mkdirSync(outside)
+  fs.writeFileSync(path.join(workspace, "src", "index.ts"), "export {}")
+  fs.writeFileSync(path.join(outside, "secret.txt"), "secret")
+  fs.symlinkSync(outside, path.join(workspace, "linked-outside"), process.platform === "win32" ? "junction" : "dir")
+  context.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }))
+
+  assert.equal(resolveWorkspacePath(workspace, "src/index.ts"), fs.realpathSync.native(path.join(workspace, "src", "index.ts")))
+  assert.throws(() => resolveWorkspacePath(workspace, "missing.ts"), /does not exist/)
+  assert.throws(() => resolveWorkspacePath(workspace, "../outside/secret.txt"), /outside the workspace/)
+  assert.throws(() => resolveWorkspacePath(workspace, "linked-outside/secret.txt"), /outside the workspace/)
+})
+
+test("bounded integer settings reject invalid and excessive values", () => {
+  assert.equal(parseBoundedInteger("4", 2, 1, 8), 4)
+  assert.equal(parseBoundedInteger("not-a-number", 2, 1, 8), 2)
+  assert.equal(parseBoundedInteger("99", 2, 1, 8), 2)
+  assert.equal(parseBoundedInteger("2.5", 2, 1, 8), 2)
 })
 
 test("attachment names are normalized and base64 is validated", () => {

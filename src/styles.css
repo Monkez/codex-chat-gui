@@ -1,41 +1,23 @@
-:root {
-  color-scheme: light;
-  font-family: "Segoe UI Variable Text", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f2f4f3;
-  color: #17202a;
-  font-kerning: normal;
-  font-optical-sizing: auto;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: auto;
-  -moz-osx-font-smoothing: auto;
-}
-
-* {
+.codex-chat,
+.codex-chat *,
+.codex-chat *::before,
+.codex-chat *::after {
   box-sizing: border-box;
 }
 
-body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-button,
-textarea {
+.codex-chat button,
+.codex-chat input,
+.codex-chat select,
+.codex-chat textarea {
   font: inherit;
 }
 
-button {
+.codex-chat button {
   cursor: pointer;
 }
 
-button:disabled {
+.codex-chat button:disabled {
   cursor: not-allowed;
-}
-
-#root {
-  min-height: 100vh;
 }
 
 .codex-chat {
@@ -72,7 +54,14 @@ button:disabled {
   overflow: hidden;
   flex-direction: column;
   color: var(--text);
+  font-family: "Segoe UI Variable Text", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-kerning: normal;
+  font-optical-sizing: auto;
+  font-synthesis: none;
   font-size: var(--font-base);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
   background:
     radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
     var(--canvas);
@@ -138,7 +127,7 @@ button:disabled {
 
 .codex-chat-header {
   position: relative;
-  z-index: 15;
+  z-index: 40;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -232,6 +221,9 @@ button:disabled {
   z-index: 28;
   display: grid;
   width: min(320px, 88vw);
+  max-height: calc(100dvh - 88px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   gap: 10px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
@@ -338,6 +330,9 @@ button:disabled {
   top: calc(100% + 8px);
   z-index: 30;
   width: min(360px, 88vw);
+  max-height: calc(100dvh - 88px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   padding: 12px;
@@ -960,6 +955,15 @@ button:disabled {
   align-items: center;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.codex-file-changes.is-error {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--line));
+}
+
+.codex-file-changes.is-error .codex-file-changes-icon {
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: var(--danger);
 }
 
 .codex-file-changes-icon {
@@ -1778,6 +1782,20 @@ button:disabled {
 
   .codex-chat-header h1 {
     font-size: 22px;
+  }
+
+  .codex-header-actions {
+    width: 100%;
+  }
+
+  .codex-run-settings-popover,
+  .codex-auth-popover {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-height: calc(100dvh - 24px);
   }
 
   .codex-transcript {

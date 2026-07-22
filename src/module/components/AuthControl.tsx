@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { ShieldCheck, ShieldOff } from "lucide-react"
 import type { CodexAuthState, CodexChatProps } from "../types"
 
@@ -18,9 +18,27 @@ export function AuthControl({
   const [apiKey, setApiKey] = useState("")
   const [open, setOpen] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
+  const controlRef = useRef<HTMLDivElement>(null)
   const status = authState?.status ?? "unknown"
   const isAuthenticated = status === "authenticated"
   const isChecking = status === "checking"
+
+  useEffect(() => {
+    if (!open) return undefined
+    function closeAuth(event: globalThis.KeyboardEvent | PointerEvent) {
+      if (event instanceof globalThis.KeyboardEvent) {
+        if (event.key === "Escape") setOpen(false)
+        return
+      }
+      if (!controlRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener("keydown", closeAuth)
+    document.addEventListener("pointerdown", closeAuth)
+    return () => {
+      document.removeEventListener("keydown", closeAuth)
+      document.removeEventListener("pointerdown", closeAuth)
+    }
+  }, [open])
 
   async function submitAuth() {
     const value = apiKey.trim()
@@ -38,19 +56,20 @@ export function AuthControl({
   }
 
   return (
-    <div className="codex-auth">
+    <div ref={controlRef} className="codex-auth">
       <button
         type="button"
         className={`codex-auth-button is-${status}`}
         onClick={() => setOpen((current) => !current)}
         title={isAuthenticated ? "Codex account connected" : "Connect Codex account"}
         aria-expanded={open}
+        aria-controls="codex-auth-dialog"
       >
         {isAuthenticated ? <ShieldCheck aria-hidden="true" /> : <ShieldOff aria-hidden="true" />}
         <span>{isAuthenticated ? authState?.accountLabel ?? "Connected" : "Connect Codex"}</span>
       </button>
       {open ? (
-        <div className="codex-auth-popover" role="dialog" aria-label="Codex authentication">
+        <div id="codex-auth-dialog" className="codex-auth-popover" role="dialog" aria-label="Codex authentication">
           <strong>{isAuthenticated ? "Codex authenticated" : "Authenticate Codex"}</strong>
           <p>
             {authState?.detail
